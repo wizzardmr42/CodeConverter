@@ -1352,6 +1352,32 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                         node, new[] { bodyStatement }, _generatedNames, _semanticModel);
                     if (withLocals.Count > 1) {
                         // Hoists were added — must use a block body.
+                        // CreateLocalsAsync places `pre-decls + [bodyStatement] +
+                        // post-assignments`. In a Function lambda the body is a
+                        // ReturnStatement — the post-assignments end up
+                        // unreachable AND target read-only anonymous-type
+                        // properties (CS0200), so we reorder them to run BEFORE
+                        // the return.
+                        if (isFunction) {
+                            // Look up the return statement by kind — CreateLocalsAsync
+                            // replaces names via ReplaceNames, so `bodyStatement` isn't
+                            // in `withLocals` by reference. Only ONE return statement
+                            // is expected (from our expression-body-to-block promotion).
+                            var returnIndex = -1;
+                            for (int i = 0; i < withLocals.Count; i++) {
+                                if (withLocals[i].IsKind(SyntaxKind.ReturnStatement)) {
+                                    returnIndex = i;
+                                    break;
+                                }
+                            }
+                            if (returnIndex >= 0 && returnIndex < withLocals.Count - 1) {
+                                var preReturn = withLocals.Take(returnIndex);
+                                var postReturn = withLocals.Skip(returnIndex + 1);
+                                var returnStmt = withLocals[returnIndex];
+                                withLocals = SyntaxFactory.List(
+                                    preReturn.Concat(postReturn).Concat(new[] { returnStmt }));
+                            }
+                        }
                         convertedStatements = withLocals;
                     } else {
                         // No hoists — keep the expression body as-is.
