@@ -272,7 +272,7 @@ internal class QueryConverter
                     // `IGrouping<K,T>` where `.k1` / `.Group` aren't valid. Add a
                     // `into @group select new { @group.Key.k1, @group.Key.k2,
                     // Group = @group }` continuation to restore the shape.
-                    var projectionSelect = await CreateGroupByProjectionAsync(gcs, GetGroupIdentifier(gcs));
+                    var projectionSelect = await CreateGroupByProjectionAsync(gcs, GetGroupIdentifier(gcs), reusableCsFromId);
                     queryContinuation = CreateGroupByContinuation(gcs, continuationClauses, projectionSelect);
                 }
                 break;
@@ -417,7 +417,7 @@ internal class QueryConverter
         return gcs.AggregationVariables.Any();
     }
 
-    private async Task<CSSyntax.SelectClauseSyntax> CreateGroupByProjectionAsync(VBSyntax.GroupByClauseSyntax gcs, SyntaxToken groupName)
+    private async Task<CSSyntax.SelectClauseSyntax> CreateGroupByProjectionAsync(VBSyntax.GroupByClauseSyntax gcs, SyntaxToken groupName, SyntaxToken rangeVariableName)
     {
         var groupIdName = ValidSyntaxFactory.IdentifierName(groupName);
         var keyAccess = SyntaxFactory.MemberAccessExpression(
@@ -473,7 +473,20 @@ internal class QueryConverter
                         SyntaxKind.SimpleMemberAccessExpression,
                         groupIdName,
                         ValidSyntaxFactory.IdentifierName(fa.FunctionName.Text));
-                    aggExpr = SyntaxFactory.InvocationExpression(invocationTarget);
+                    // VB `Into Value = Sum(ss.Value)` — the aggregation argument
+                    // is evaluated per-element of the group, so the C# form is
+                    // `Group.Sum(ss => ss.Value)` (lambda over the outer range
+                    // variable). Without the lambda we'd emit bare `Group.Sum()`
+                    // on IGrouping<K,T> where T isn't numeric — CS1929.
+                    if (fa.Argument != null) {
+                        var argBody = await fa.Argument.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+                        var lambdaParam = SyntaxFactory.Parameter(rangeVariableName);
+                        var lambda = SyntaxFactory.SimpleLambdaExpression(lambdaParam, argBody);
+                        aggExpr = SyntaxFactory.InvocationExpression(invocationTarget,
+                            SyntaxFactory.ArgumentList(SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Argument(lambda))));
+                    } else {
+                        aggExpr = SyntaxFactory.InvocationExpression(invocationTarget);
+                    }
                     break;
                 default:
                     aggExpr = groupIdName;
