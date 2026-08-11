@@ -1678,10 +1678,35 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS0266 `double` → `decimal?` (3 sites). VB's implicit numeric widening not applied in assignment context")]
+    [Fact]
     public async Task DoubleToNullableDecimalAssignmentAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `pol.PostageBand = 1.96` — RHS is Double (VB default for
+        // decimal literals with no suffix), LHS is Decimal?. VB widens
+        // implicitly. Codeconv preserves `1.96d` (C# double) and misses the
+        // explicit cast in TypeConversionAnalyzer, giving CS0266.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class Line
+    Public Property Amount As Decimal?
+End Class
+
+Public Module M
+    Public Sub Do1(l As Line)
+        l.Amount = 1.96
+    End Sub
+End Module",
+            @"
+public partial class Line
+{
+    public decimal? Amount { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(Line l)
+    {
+        l.Amount = 1.96m;
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0266 `int` → `ushort` (2 sites). Narrowing needs explicit cast")]

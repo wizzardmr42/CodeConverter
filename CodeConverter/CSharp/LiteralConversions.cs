@@ -73,8 +73,18 @@ internal static class LiteralConversions
     /// See LiteralConversions.GetLiteralExpression
     /// These are all the literals where the type will already be correct from the literal declaration
     /// </summary>
-    public static object ConvertLiteralNumericValueOrNull(object value, ITypeSymbol vbConvertedType) =>
-        vbConvertedType?.SpecialType switch {
+    public static object ConvertLiteralNumericValueOrNull(object value, ITypeSymbol vbConvertedType)
+    {
+        // Peel `Nullable<T>` so `Decimal?`/`Int32?`/etc. targets get the same
+        // literal conversion as the non-nullable T. Without this, assigning
+        // a VB `1.96` literal to a `Decimal?` property emits `1.96d` (a double
+        // literal that inherits the default suffix) instead of `1.96m`,
+        // producing CS0266 "cannot implicitly convert double → decimal?".
+        var effectiveType = vbConvertedType;
+        if (effectiveType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T, TypeArguments: { Length: 1 } typeArgs }) {
+            effectiveType = typeArgs[0];
+        }
+        return effectiveType?.SpecialType switch {
             SpecialType.System_Int32 => Convert.ToInt32(value, CultureInfo.InvariantCulture), //Special case since it's the C# default and doesn't need a suffix like the rest
             SpecialType.System_UInt32 => Convert.ToUInt32(value, CultureInfo.InvariantCulture),
             SpecialType.System_Int64 => Convert.ToInt64(value, CultureInfo.InvariantCulture),
@@ -84,6 +94,7 @@ internal static class LiteralConversions
             SpecialType.System_Decimal => Convert.ToDecimal(value, CultureInfo.InvariantCulture),
             _ => null
         };
+    }
 
     internal static string GetQuotedStringTextForUser(string textForUser, string valueTextForCompiler)
     {
