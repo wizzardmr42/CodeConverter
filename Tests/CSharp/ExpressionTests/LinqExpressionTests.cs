@@ -908,4 +908,230 @@ public partial class ConversionTest6
     }
 }");
     }
+
+    [Fact]
+    public async Task GroupJoinProjectsFromVarAndIntoVarAsync()
+    {
+        // VB `Group Join <j> In ... Into <n>` implicitly projects `{<from>,<into>}`
+        // — downstream `result.<from>` and `result.<into>` both work. Codeconv
+        // used to emit `select <from>` and drop the into variable.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class SC
+    Public Property ID As Integer
+End Class
+
+Public Class SL
+    Public Property SCID As Integer
+    Public Property Note As String
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim scs As New List(Of SC)
+        Dim sls As New List(Of SL)
+        Dim r = From sc In scs
+                Group Join sl In sls On sc.ID Equals sl.SCID Into details = Group
+                Where details.Any()
+                Select sc.ID, DetailCount = details.Count
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class SC
+{
+    public int ID { get; set; }
+}
+
+public partial class SL
+{
+    public int SCID { get; set; }
+    public string Note { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var scs = new List<SC>();
+        var sls = new List<SL>();
+        var r = from sc in scs
+                join sl in sls on sc.ID equals sl.SCID into details
+                where details.Any()
+                select new { sc.ID, DetailCount = details.Count() };
+    }
+}");
+    }
+
+    [Fact]
+    public async Task AnonymousTypeReassignmentSkipsInvalidVarCastAsync()
+    {
+        // VB `q2 = From x In q2 ...` where q2 was declared as an anonymous-typed
+        // IEnumerable: codeconv used to emit `(var)(from x in q2 ...)` which is
+        // a parse error (CS0825). Drop the cast — assignment is type-safe by
+        // inference.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Module M
+    Public Sub Do1()
+        Dim src As New List(Of Integer)
+        Dim q = From x In src Group By x Into Value = Sum(x)
+        q = From x In q Order By x.Value
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var src = new List<int>();
+        var q = from x in src
+                group x by x into Group
+                let x = Group.Key
+                select new { x = Group.Key, Value = Group.Sum(x => x) };
+        q = from x in q
+            orderby x.Value
+            select x;
+    }
+}");
+    }
+
+    [Fact]
+    public async Task GroupByAggregationArgumentBecomesLambdaAsync()
+    {
+        // VB `Group By ... Into Total = Sum(x.V)` — the aggregation argument
+        // `x.V` is evaluated per group element. In C# this becomes
+        // `Group.Sum(x => x.V)`. Codeconv used to emit `Group.Sum()` (no arg)
+        // which triggers CS1929 on IGrouping<K, T> where T isn't numeric.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Row
+    Public Property Bucket As Integer
+    Public Property Value As Integer
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim rows As New List(Of Row)
+        Dim r = From x In rows
+                Group By x.Bucket, x.Value Into Total = Sum(x.Value)
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Row
+{
+    public int Bucket { get; set; }
+    public int Value { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var rows = new List<Row>();
+        var r = from x in rows
+                group x by new { x.Bucket, x.Value } into Group
+                select new { Group.Key.Bucket, Group.Key.Value, Total = Group.Sum(x => x.Value) };
+    }
+}");
+    }
+
+    [Fact]
+    public async Task NullableBoolLambdaBodyIsUnwrappedForBoolPredicateAsync()
+    {
+        // VB `.Any(Function(x) x.NullableDate > cutoff)` — the comparison produces
+        // Boolean? because the LHS is nullable. When the lambda's target delegate
+        // returns bool, unwrap with `?? false` so it satisfies `Func<T, bool>`.
+        // Otherwise CS0266 / CS1662.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Item
+    Public Property Stamp As Date?
+End Class
+
+Public Module M
+    Public Function Fresh(items As IEnumerable(Of Item), cutoff As Date) As Boolean
+        Return items.Any(Function(i) i.Stamp > cutoff)
+    End Function
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Item
+{
+    public DateTime? Stamp { get; set; }
+}
+
+public static partial class M
+{
+    public static bool Fresh(IEnumerable<Item> items, DateTime cutoff)
+    {
+        return items.Any(i => (i.Stamp is { } arg1 ? arg1 > cutoff : (bool?)null) ?? false);
+    }
+}");
+    }
+
+    [Fact]
+    public async Task NestedFuncLambdaInsideExpressionTreeSuppressesIsPatternAsync()
+    {
+        // A Func-typed lambda nested inside an outer Expression<Func<...>>
+        // (e.g. `where !s.Kids.Any(k => k.Stamp > cutoff)` in an IQueryable
+        // query) is still going to be translated as part of the outer
+        // expression tree — patterns aren't allowed there (CS8122). Suppress
+        // the `is { }` pattern-match null-safe transform for the inner lambda
+        // by inheriting the outer IsWithinQuery flag.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Kid
+    Public Property Stamp As Date?
+End Class
+
+Public Class Parent
+    Public Property Kids As ICollection(Of Kid)
+End Class
+
+Public Module M
+    Public Function Filter(src As IQueryable(Of Parent), cutoff As Date) As IEnumerable(Of Parent)
+        Return From p In src
+               Where Not p.Kids.Any(Function(k) k.Stamp > cutoff)
+               Select p
+    End Function
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Kid
+{
+    public DateTime? Stamp { get; set; }
+}
+
+public partial class Parent
+{
+    public ICollection<Kid> Kids { get; set; }
+}
+
+public static partial class M
+{
+    public static IEnumerable<Parent> Filter(IQueryable<Parent> src, DateTime cutoff)
+    {
+        return from p in src
+               where !p.Kids.Any(k => k.Stamp > cutoff)
+               select p;
+    }
+}");
+    }
 }

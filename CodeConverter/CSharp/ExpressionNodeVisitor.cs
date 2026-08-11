@@ -1353,7 +1353,13 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                     // hit CS0266/CS1662 on a per-element nullable comparison
                     // like `Function(po) po.OrderDate > cutoff` where OrderDate
                     // is Date? and codeconv emitted a `bool?` ternary body.
-                    if (node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader) {
+                    //
+                    // Skip in query/expression-tree context: there the nullable
+                    // pattern-match transform is suppressed, so the emission is
+                    // already `bool` in C# (lifted `>` on `T?`); adding `?? false`
+                    // would produce `bool ?? false` (CS0019).
+                    if (!TriviaConvertingExpressionVisitor.IsWithinQuery &&
+                        node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader) {
                         var bodyType = _semanticModel.GetTypeInfo(node.Body).Type;
                         var lambdaConverted = _semanticModel.GetTypeInfo(node).ConvertedType as INamedTypeSymbol;
                         var delegateReturn = lambdaConverted?.DelegateInvokeMethod?.ReturnType;
