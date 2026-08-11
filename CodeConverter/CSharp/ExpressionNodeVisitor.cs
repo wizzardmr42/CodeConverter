@@ -2008,6 +2008,11 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             var symbolInfo = GetSymbolInfoInDocument<ISymbol>(expression);
             if (symbolInfo is IPropertySymbol { ReturnsByRef: false, ReturnsByRefReadonly: false } propertySymbol) {
                 // a property in VB.NET code can be ReturnsByRef if it's defined in a C# assembly the VB.NET code references
+                // C# anonymous type properties (from `new { X = ... }`) are init-only, but the VB semantic model
+                // still reports IsReadOnly = false when the source came from VB's `New With { .X = ... }` and
+                // gets translated as an anonymous type. If we generate a post-assignment `receiver.X = argX`, C#
+                // rejects it as CS0200. Treat anonymous type properties as PreAssignment only.
+                if (propertySymbol.ContainingType?.IsAnonymousType == true) return RefConversion.PreAssigment;
                 return propertySymbol.IsReadOnly ? RefConversion.PreAssigment : RefConversion.PreAndPostAssignment;
             }
             else if (symbolInfo is IFieldSymbol { IsConst: true } or ILocalSymbol { IsConst: true }) {
