@@ -182,7 +182,29 @@ internal class QueryConverter
         CSSyntax.QueryContinuationSyntax queryContinuation = null;
         switch (clauseEnd) {
             case null:
-                selectOrGroup = CreateDefaultSelectClause(reusableCsFromId).WithAdditionalAnnotations(DefaultSelectAnnotation);
+                // If a Group Join `Into <name>` is in scope, VB's implicit projection
+                // is `{ <from-var>, <into-var> }`. C#'s default `select <from-var>`
+                // loses <into-var>, and downstream references like `c.sc` or
+                // `c.assignedDetails` fail (issue #29-adjacent). Emit an explicit
+                // anonymous type projection when we see one.
+                var groupJoinIntos = convertedClauses.OfType<CSSyntax.JoinClauseSyntax>()
+                    .Where(j => j.Into != null)
+                    .Select(j => j.Into.Identifier)
+                    .ToList();
+                if (groupJoinIntos.Any()) {
+                    var members = new List<CSSyntax.AnonymousObjectMemberDeclaratorSyntax> {
+                        SyntaxFactory.AnonymousObjectMemberDeclarator(
+                            ValidSyntaxFactory.IdentifierName(reusableCsFromId))
+                    };
+                    foreach (var intoId in groupJoinIntos) {
+                        members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(
+                            ValidSyntaxFactory.IdentifierName(intoId)));
+                    }
+                    var anon = SyntaxFactory.AnonymousObjectCreationExpression(SyntaxFactory.SeparatedList(members));
+                    selectOrGroup = SyntaxFactory.SelectClause(anon);
+                } else {
+                    selectOrGroup = CreateDefaultSelectClause(reusableCsFromId).WithAdditionalAnnotations(DefaultSelectAnnotation);
+                }
                 break;
             case VBSyntax.GroupByClauseSyntax gcs:
                 var groupKeyIds = GetGroupKeyIdentifiers(gcs).ToList();
