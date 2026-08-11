@@ -57,7 +57,11 @@ internal static class CachedReflectedDelegates
         var getDelegate = instance.ReflectedPropertyGetter(propertyToAccess)
             ?.CreateOpenInstanceDelegateForcingType<TDesiredArg, TDesiredTarget>();
         if (getDelegate == null) {
-            Debug.Fail($"Delegate not found for {instance.GetType()}");
+            // Debug.Fail terminates debug builds (fail-fast). We depend on this being
+            // survivable — some Roslyn versions rename or remove internal properties
+            // (see LocalSymbol+VariableLocalSymbol not exposing IsUsing on current
+            // Microsoft.CodeAnalysis.VisualBasic). Log and return default instead.
+            Debug.WriteLine($"Delegate not found for {instance.GetType()}");
             return default;
         }
 

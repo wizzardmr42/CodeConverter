@@ -430,8 +430,14 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             if (IsSubPartOfConditionalAccess(node)) {
                 return isDefaultProperty ? SyntaxFactory.ElementBindingExpression()
                     : await AdjustForImplicitInvocationAsync(node, SyntaxFactory.MemberBindingExpression(simpleNameSyntax));
-            } else if (node.IsParentKind(Microsoft.CodeAnalysis.VisualBasic.SyntaxKind.NamedFieldInitializer)) {
-                return ValidSyntaxFactory.IdentifierName(_tempNameForAnonymousScope[node.Name.Identifier.Text].Peek().TempName);
+            } else if (node.IsParentKind(Microsoft.CodeAnalysis.VisualBasic.SyntaxKind.NamedFieldInitializer)
+                       && _tempNameForAnonymousScope.TryGetValue(node.Name.Identifier.Text, out var stack) && stack.Any()) {
+                // Ported from upstream commit d3835784 (Fix Object Initializers
+                // Referencing Other Properties #1080). The old code did an
+                // unchecked dictionary lookup that threw when the field name
+                // wasn't a known anonymous-scope name, breaking legitimate
+                // `.X = someExpr` initializers that referred to non-scoped names.
+                return ValidSyntaxFactory.IdentifierName(stack.Peek().TempName);
             }
             left = _withBlockLhs.Peek();
         }
@@ -1742,16 +1748,40 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             : null;
     }
 
+    // Ported from upstream commit 0532ed5b ("Fix VB With block conversion with
+    // null-conditional operator"). Old logic walked up the parent chain, and if
+    // the top parent was a ConditionalAccessExpression it returned true — which
+    // included the LHS/Expression side. That caused `.Note?.Code` inside a
+    // `With ExistingPBI` to be treated as a "sub part" so the WithBlockLhs
+    // substitution was skipped, leaving bare `.Note?.Code` in the output.
+    // The correct rule: the node is a sub part ONLY if it's reached via the
+    // WhenNotNull side of a `?.` — the LHS/Expression side still needs the With
+    // substitution.
     private static bool IsSubPartOfConditionalAccess(VBasic.Syntax.MemberAccessExpressionSyntax node)
     {
-        var firstPossiblyConditionalAncestor = node.Parent;
-        while (firstPossiblyConditionalAncestor != null &&
-               firstPossiblyConditionalAncestor.IsKind(VBasic.SyntaxKind.InvocationExpression,
-                   VBasic.SyntaxKind.SimpleMemberAccessExpression)) {
-            firstPossiblyConditionalAncestor = firstPossiblyConditionalAncestor.Parent;
-        }
+        SyntaxNode child = node;
+        SyntaxNode parent = node.Parent;
 
-        return firstPossiblyConditionalAncestor?.IsKind(VBasic.SyntaxKind.ConditionalAccessExpression) == true;
+        while (parent != null) {
+            if (parent.IsKind(VBasic.SyntaxKind.InvocationExpression,
+                              VBasic.SyntaxKind.SimpleMemberAccessExpression,
+                              VBasic.SyntaxKind.ParenthesizedExpression)) {
+                child = parent;
+                parent = parent.Parent;
+                continue;
+            }
+
+            if (parent is VBSyntax.ConditionalAccessExpressionSyntax cae) {
+                if (cae.WhenNotNull == child) return true;
+                if (cae.Expression == child) {
+                    child = parent;
+                    parent = parent.Parent;
+                    continue;
+                }
+            }
+            break;
+        }
+        return false;
     }
 
     private async Task<IEnumerable<ArgumentSyntax>> ConvertArgumentsAsync(VBasic.Syntax.ArgumentListSyntax node)
