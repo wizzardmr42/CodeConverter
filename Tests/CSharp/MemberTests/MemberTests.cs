@@ -4274,4 +4274,49 @@ BC30455: Argument not specified for parameter 'str3' of 'Private Sub OptionalByR
 CS7036: There is no argument given that corresponds to the required formal parameter 'str1' of 'MissingByRefArgumentWithNoExplicitDefaultValue.ByRefNoDefault(ref string)'
 ");
     }
+
+    [Fact]
+    public async Task BareExtensionMethodCallInExtendedTypeAddsMeReceiverAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(
+            @"Imports System.Runtime.CompilerServices
+
+Public Interface IThing
+End Interface
+
+Module ThingExtensions
+    <Extension>
+    Public Function IsOK(Task As IThing) As Boolean
+        Return True
+    End Function
+End Module
+
+Public Class SomeThing
+    Implements IThing
+    Public Sub DoIt()
+        If Not IsOK Then Return
+    End Sub
+End Class",
+            @"
+public partial interface IThing
+{
+}
+
+internal static partial class ThingExtensions
+{
+    public static bool IsOK(this IThing Task)
+    {
+        return true;
+    }
+}
+
+public partial class SomeThing : IThing
+{
+    public void DoIt()
+    {
+        if (!this.IsOK())
+            return;
+    }
+}", incompatibleWithAutomatedCommentTesting: true);
+    }
 }

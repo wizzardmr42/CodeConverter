@@ -77,7 +77,14 @@ internal class VbNameExpander : ISyntaxExpander
     {
         var classType = (ITypeSymbol)node.GetEnclosingDeclaredTypeSymbol(semanticModel);
 
-        return classType.InheritsFromOrEquals(symbol.ReceiverType);
+        // `includeInterfaces: true` is required so a class that IMPLEMENTS the
+        // extension's receiver interface (e.g. HeartBeatTask : IHeartBeatTask
+        // calling <Extension> Function StockCheckHours(t As IHeartBeatTask))
+        // qualifies its bare reference with `Me` — the default overload only
+        // walks the base-type chain and misses interface implementations,
+        // causing us to emit `HeartbeatExtensions.StockCheckHours()` with a
+        // dropped receiver.
+        return classType.InheritsFromOrEquals(symbol.ReceiverType, true);
     }
 
     /// <summary>
