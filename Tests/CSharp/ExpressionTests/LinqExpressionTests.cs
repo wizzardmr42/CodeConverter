@@ -606,6 +606,11 @@ internal partial class Test
     [Fact]
     public async Task LinqGroupByTwoThingsAnonymouslyAsync()
     {
+        // VB `Group By <k1>, <k2> Into Group` produces an anonymous shape
+        // `{ k1, k2, Group }` where downstream `.k1` / `.Group` both work
+        // (a `System.Linq.IGrouping<K,T>` doesn't). C# needs an explicit
+        // `into @group select new { @group.Key.k1, @group.Key.k2, Group = @group }`
+        // continuation to preserve the shape. Bug 2a / #1080-adjacent.
         await TestConversionVisualBasicToCSharpAsync(@"Public Class Class1
     Sub Foo()
         Dim xs As New List(Of String)
@@ -620,10 +625,10 @@ public partial class Class1
     {
         var xs = new List<string>();
         var y = from x in xs
-                group x by new { x.Length, Count = x.Count() };
+                group x by new { x.Length, Count = x.Count() } into Group
+                select new { Group.Key.Length, Group.Key.Count, Group };
     }
 }");
-        // Current characterization is slightly wrong, I think it still needs this on the end "into g select new { Length = g.Key.Length, Count = g.Key.Count, Group = g.AsEnumerable() }"
     }
 
     [Fact]

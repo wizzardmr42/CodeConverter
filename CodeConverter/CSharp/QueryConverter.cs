@@ -204,6 +204,15 @@ internal class QueryConverter
                 if (nestedClause != null) {
                     continuationClauses = continuationClauses.AddRange(nestedClause.Clauses);
                     queryContinuation = CreateGroupByContinuation(gcs, continuationClauses, nestedClause.SelectOrGroup);
+                } else if (RequiresProjectionContinuation(gcs, groupKeyIds)) {
+                    // VB `Group By k1, k2 Into Group` produces an anonymous type
+                    // `{ k1, k2, Group }` where downstream `gg.k1` and `gg.Group`
+                    // both work. Emitting a bare `group x by ...` in C# gives an
+                    // `IGrouping<K,T>` where `.k1` / `.Group` aren't valid. Add a
+                    // `into @group select new { @group.Key.k1, @group.Key.k2,
+                    // Group = @group }` continuation to restore the shape.
+                    var projectionSelect = await CreateGroupByProjectionAsync(gcs, GetGroupIdentifier(gcs));
+                    queryContinuation = CreateGroupByContinuation(gcs, continuationClauses, projectionSelect);
                 }
                 break;
             case VBSyntax.SelectClauseSyntax scs:
@@ -328,6 +337,78 @@ internal class QueryConverter
             VBSyntax.WhereClauseSyntax x => await ConvertWhereClauseAsync(x).YieldAsync(),
             _ => throw new NotImplementedException($"Conversion for query clause with kind '{node.Kind()}' not implemented")
         };
+    }
+
+    // We need a projection continuation when downstream code will use bare key
+    // names or `.Group` on the query result. The composite-key `Group By k1, k2
+    // Into Group` case is the always-broken shape — codeconv currently emits a
+    // bare group clause and the result becomes an unhelpful `IGrouping<K,T>`.
+    // For single-key + Let (the existing code path), the let clause already
+    // gives downstream access, so we don't need a projection there.
+    private static bool RequiresProjectionContinuation(VBSyntax.GroupByClauseSyntax gcs, List<string> groupKeyIds)
+    {
+        // Only when we didn't emit a let for single-key AND VB has an `Into`
+        // aggregation that names an anonymous field the downstream depends on.
+        return groupKeyIds.Count != 1 && gcs.AggregationVariables.Any();
+    }
+
+    private async Task<CSSyntax.SelectClauseSyntax> CreateGroupByProjectionAsync(VBSyntax.GroupByClauseSyntax gcs, SyntaxToken groupName)
+    {
+        var groupIdName = ValidSyntaxFactory.IdentifierName(groupName);
+        var keyAccess = SyntaxFactory.MemberAccessExpression(
+            SyntaxKind.SimpleMemberAccessExpression,
+            groupIdName,
+            ValidSyntaxFactory.IdentifierName("Key"));
+
+        var members = new List<CSSyntax.AnonymousObjectMemberDeclaratorSyntax>();
+
+        // For each key, emit `@group.Key.<name>` — C# infers the property name
+        // from the trailing member access, so we don't need an explicit
+        // NameEquals unless we had to invent one.
+        int keyIndex = 0;
+        foreach (var key in gcs.Keys) {
+            var nameToken = key.NameEquals?.Identifier.Identifier
+                            ?? key.Expression.ExtractAnonymousTypeMemberName()
+                            ?? SyntaxFactory.Identifier("key" + keyIndex);
+            var memberAccess = SyntaxFactory.MemberAccessExpression(
+                SyntaxKind.SimpleMemberAccessExpression,
+                keyAccess,
+                ValidSyntaxFactory.IdentifierName(nameToken.Text));
+            members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(memberAccess));
+            keyIndex++;
+        }
+
+        // For each aggregation variable, emit `<name> = <expr>`.
+        // - `Into Group` (GroupAggregationSyntax): expr is the group identifier itself
+        // - `Into Foo = Count()` etc.: apply the function to the group
+        int aggIndex = 0;
+        foreach (var agg in gcs.AggregationVariables) {
+            var aggName = agg.NameEquals?.Identifier.Identifier.Text
+                          ?? (agg.Aggregation is VBSyntax.GroupAggregationSyntax ? "Group" : "agg" + aggIndex);
+            CSSyntax.ExpressionSyntax aggExpr;
+            switch (agg.Aggregation) {
+                case VBSyntax.GroupAggregationSyntax:
+                    aggExpr = groupIdName;
+                    break;
+                case VBSyntax.FunctionAggregationSyntax fa:
+                    var invocationTarget = SyntaxFactory.MemberAccessExpression(
+                        SyntaxKind.SimpleMemberAccessExpression,
+                        groupIdName,
+                        ValidSyntaxFactory.IdentifierName(fa.FunctionName.Text));
+                    aggExpr = SyntaxFactory.InvocationExpression(invocationTarget);
+                    break;
+                default:
+                    aggExpr = groupIdName;
+                    break;
+            }
+            members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(
+                SyntaxFactory.NameEquals(ValidSyntaxFactory.IdentifierName(aggName)),
+                aggExpr));
+            aggIndex++;
+        }
+
+        var anon = SyntaxFactory.AnonymousObjectCreationExpression(SyntaxFactory.SeparatedList(members));
+        return SyntaxFactory.SelectClause(anon);
     }
 
     private async Task<CSSyntax.ExpressionSyntax> GetGroupExpressionAsync(VBSyntax.GroupByClauseSyntax gs)
