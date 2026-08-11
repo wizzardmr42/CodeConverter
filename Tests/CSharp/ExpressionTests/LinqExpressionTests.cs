@@ -1707,10 +1707,66 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS1937/1938 `name not in scope on X side of equals` (4 sites). Join order matters in C# but VB is permissive — swap sides")]
-    public async Task JoinEqualsOperandOrderSwapAsync()
+    [Fact]
+    public async Task JoinEqualsOperandOrderSwapWithDeepMemberAccessAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB permits either operand of `Equals` to reference the new join
+        // variable; C# requires the LEFT to reference outer scope and the
+        // RIGHT to reference the new join variable (CS1937/1938 otherwise).
+        //
+        // Codeconv already swapped for bare `newVar` and one-deep
+        // `newVar.Member`, but MISSED deep chains like `newVar.Sub.Member`
+        // — the check only inspected the immediate MemberAccess's Expression.
+        // Fix: walk the chain to the root identifier.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Sl
+    Public Property StockItemID As Integer
+End Class
+
+Public Class Oi
+    Public Property StockItemID As Integer
+End Class
+
+Public Class RreItem
+    Public Property OrderItem As Oi
+End Class
+
+Public Module M
+    Public Sub Do1(sls As IEnumerable(Of Sl), rreitems As IEnumerable(Of RreItem))
+        Dim r = From sl In sls
+                Join rreitem In rreitems On rreitem.OrderItem.StockItemID Equals sl.StockItemID
+                Select sl
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Sl
+{
+    public int StockItemID { get; set; }
+}
+
+public partial class Oi
+{
+    public int StockItemID { get; set; }
+}
+
+public partial class RreItem
+{
+    public Oi OrderItem { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(IEnumerable<Sl> sls, IEnumerable<RreItem> rreitems)
+    {
+        var r = from sl in sls
+                join rreitem in rreitems on sl.StockItemID equals rreitem.OrderItem.StockItemID
+                select sl;
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS1936 no query pattern on TValue (2 sites). Generic type argument used as query source — needs interface constraint check or fallback")]

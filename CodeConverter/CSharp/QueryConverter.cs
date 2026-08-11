@@ -703,23 +703,32 @@ internal class QueryConverter
     private static (CSSyntax.ExpressionSyntax Lhs, CSSyntax.ExpressionSyntax Rhs) CreateJoinAnonymousObjectKeys(IEnumerable<(CSSyntax.ExpressionSyntax Lhs, CSSyntax.ExpressionSyntax Rhs)> expressions,
         SyntaxToken convertIdentifier)
     {
-        // C# enforces specific ordering of range variables around the equals token inside a join clause (CS1937)
+        // C# enforces specific ordering of range variables around the equals token inside a join clause (CS1937/1938).
+        // Walk the LHS expression chain to its root identifier — deep member
+        // accesses like `rreitem.OrderItem.StockItemID` need the same swap
+        // treatment as bare `rreitem` or one-deep `rreitem.OrderItem`.
+        static string GetRootIdentifier(CSSyntax.ExpressionSyntax expr)
+        {
+            while (true) {
+                switch (expr) {
+                    case CSSyntax.IdentifierNameSyntax id: return id.Identifier.ValueText;
+                    case CSSyntax.MemberAccessExpressionSyntax ma: expr = ma.Expression; break;
+                    case CSSyntax.ConditionalAccessExpressionSyntax ca: expr = ca.Expression; break;
+                    case CSSyntax.InvocationExpressionSyntax inv: expr = inv.Expression; break;
+                    case CSSyntax.ParenthesizedExpressionSyntax par: expr = par.Expression; break;
+                    default: return null;
+                }
+            }
+        }
         var swappedExpressions = expressions
             .Select(expression => {
-                return expression.Lhs switch
-                {
-                    CSSyntax.MemberAccessExpressionSyntax mac => mac.Expression is not CSSyntax.IdentifierNameSyntax idNameSyntax ||
-                                                                 idNameSyntax.Identifier.ValueText != convertIdentifier.ValueText
-                        ? expression
-                        : SwapExpressions(expression),
-
-
-                    CSSyntax.IdentifierNameSyntax idName => idName.Identifier.ValueText != convertIdentifier.ValueText
-                        ? expression
-                        : SwapExpressions(expression),
-
-                    _ => throw new NotImplementedException($"Conversion for join query clause with condition of kind '{expression.Lhs.Kind()}' not implemented")
-                };
+                var lhsRoot = GetRootIdentifier(expression.Lhs);
+                if (lhsRoot == null) {
+                    throw new NotImplementedException($"Conversion for join query clause with condition of kind '{expression.Lhs.Kind()}' not implemented");
+                }
+                return lhsRoot == convertIdentifier.ValueText
+                    ? SwapExpressions(expression)
+                    : expression;
             })
             .ToList();
 
