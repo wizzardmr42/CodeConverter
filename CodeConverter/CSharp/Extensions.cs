@@ -1,4 +1,5 @@
-﻿using Microsoft.CodeAnalysis.CSharp.Syntax;
+﻿using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace ICSharpCode.CodeConverter.CSharp;
 
@@ -12,7 +13,17 @@ internal static class Extensions
     /// </summary>
     public static StatementSyntax UnpackNonNestedBlock(this BlockSyntax block)
     {
-        return block.Statements.Count == 1 && !block.ContainsNestedStatements() ? block.Statements[0] : block;
+        // C# forbids local declarations or labeled statements as "embedded"
+        // statements (the position after `if`/`foreach`/`while`/etc. without
+        // braces) — CS1023 "Embedded statement cannot be a declaration or
+        // labeled statement". Keep the block wrap when the single statement
+        // is one of those.
+        return block.Statements.Count == 1
+               && !block.ContainsNestedStatements()
+               && !block.Statements[0].IsKind(SyntaxKind.LocalDeclarationStatement)
+               && !block.Statements[0].IsKind(SyntaxKind.LabeledStatement)
+            ? block.Statements[0]
+            : block;
     }
 
     /// <summary>

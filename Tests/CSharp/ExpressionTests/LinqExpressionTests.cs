@@ -1840,10 +1840,47 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS1023 embedded statement invalid (3 sites). Multi-statement If-then without End If in VB emitted without a block in C#")]
-    public async Task InlineIfMultiStatementBlockAsync()
+    [Fact]
+    public async Task ForEachBodyWithSingleDeclarationKeepsBracesAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `For Each o In orders : Dim od = o.Detail : Next` — VB permits a
+        // single Dim as the loop body. Codeconv previously unpacked the
+        // block wrap and emitted `foreach (var o in orders) var od = o.Detail;`
+        // which C# rejects (CS1023: "Embedded statement cannot be a
+        // declaration or labeled statement").
+        //
+        // Fix: UnpackNonNestedBlock keeps the block when the single statement
+        // is a LocalDeclarationStatement or LabeledStatement.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+
+Public Class OrderRef
+    Public Property Detail As Object
+End Class
+
+Public Module M
+    Public Sub Do1(orders As IEnumerable(Of OrderRef))
+        For Each o In orders
+            Dim od = o.Detail
+        Next
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+
+public partial class OrderRef
+{
+    public object Detail { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(IEnumerable<OrderRef> orders)
+    {
+        foreach (var o in orders)
+        {
+            var od = o.Detail;
+        }
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS1003 syntax error (4 sites). Investigate individually")]
