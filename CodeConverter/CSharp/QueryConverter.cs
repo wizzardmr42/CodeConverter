@@ -1,4 +1,5 @@
 ﻿using Microsoft.CodeAnalysis.CSharp;
+using ICSharpCode.CodeConverter.Util.FromRoslyn;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.VisualBasic.Syntax;
 
@@ -648,7 +649,27 @@ internal class QueryConverter
 
     private async Task<CSSyntax.QueryClauseSyntax> ConvertWhereClauseAsync(VBSyntax.WhereClauseSyntax ws)
     {
-        return SyntaxFactory.WhereClause(await ws.Condition.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor));
+        var condition = await ws.Condition.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+        // VB `Where r.Reason?.SomeBool` — the `?.` gives a genuine `bool?`,
+        // and VB Where accepts it via nullable Boolean semantics (Nothing →
+        // filter out). C# `where` requires `bool` (CS0266). Append `?? false`
+        // to preserve the semantics.
+        //
+        // Restricted to conditional-access conditions: relational and equality
+        // ops with nullable operands look nullable to VB's semantic model but
+        // C#'s lifted operator returns `bool` directly, so appending
+        // `?? false` there would produce `bool ?? false` — CS0019.
+        if (ws.Condition.SkipOutOfParens() is VBSyntax.ConditionalAccessExpressionSyntax) {
+            var conditionType = _semanticModel.GetTypeInfo(ws.Condition).Type;
+            if (conditionType != null && conditionType.IsNullable(out var underlying)
+                                      && underlying?.SpecialType == SpecialType.System_Boolean) {
+                condition = SyntaxFactory.BinaryExpression(
+                    SyntaxKind.CoalesceExpression,
+                    condition.AddParens(),
+                    LiteralConversions.GetLiteralExpression(false));
+            }
+        }
+        return SyntaxFactory.WhereClause(condition);
     }
 
     private async Task<CSSyntax.QueryClauseSyntax> ConvertSelectClauseAsync(VBSyntax.SelectClauseSyntax sc)

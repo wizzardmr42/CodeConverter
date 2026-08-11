@@ -1624,10 +1624,52 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0266 `bool?` → `bool` (5 remaining sites). Sites the lambda-body unwrap didn't cover — likely non-lambda contexts (assignments, ternaries in expression trees)")]
-    public async Task RemainingNullableBoolToBoolContextsAsync()
+    [Fact]
+    public async Task WhereClauseConditionalAccessBoolUnwrappedAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `Where r.Reason?.SomeBool` — the `?.` gives `bool?`, VB accepts
+        // it via nullable Boolean semantics (Nothing → filter out). C#
+        // `where` requires `bool` (CS0266). ConvertWhereClauseAsync now
+        // appends `?? false` when the condition's inferred VB type is
+        // `Nullable<Boolean>`, preserving VB's semantics.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Reason
+    Public Property AutoCancel As Boolean
+End Class
+
+Public Class RRE
+    Public Property Reason As Reason
+End Class
+
+Public Module M
+    Public Function Any1(rres As IEnumerable(Of RRE)) As Boolean
+        Return (From r In rres Where r.Reason?.AutoCancel Select r).Any()
+    End Function
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Reason
+{
+    public bool AutoCancel { get; set; }
+}
+
+public partial class RRE
+{
+    public Reason Reason { get; set; }
+}
+
+public static partial class M
+{
+    public static bool Any1(IEnumerable<RRE> rres)
+    {
+        return (from r in rres
+                where (r.Reason?.AutoCancel) ?? false
+                select r).Any();
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0266 `string` → `SqlQueryWithParameters` (3 sites). VB widens String to SqlQueryWithParameters via `Widening Operator CType`. Codeconv drops the implicit conversion at assignment sites")]
