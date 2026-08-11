@@ -1393,31 +1393,44 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 _typeContext.PerScopeState.PushScope();
                 try {
                     var csNode = await node.Body.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
-                    // When the Function lambda's inferred VB body type is
-                    // Nullable<Boolean> but the target delegate returns `bool`
-                    // (Where/Any/All predicates), unwrap with `?? false` so the
-                    // predicate matches Func<T, bool>. Without this, callers
-                    // hit CS0266/CS1662 on a per-element nullable comparison
-                    // like `Function(po) po.OrderDate > cutoff` where OrderDate
-                    // is Date? and codeconv emitted a `bool?` ternary body.
+                    // When the Function lambda's inferred VB body type is a
+                    // Nullable<T> but the target delegate returns non-nullable
+                    // T, unwrap with `?? default(T)` so the delegate signature
+                    // matches. Without this, callers hit CS0266/CS1662 on
+                    // per-element nullable comparisons / aggregations —
+                    // `Function(po) po.OrderDate > cutoff` (Date? gives bool?)
+                    // or `Function(oi) oi.Sum(...)` where the underlying is a
+                    // nullable numeric aggregation.
                     //
-                    // Skip in query/expression-tree context: there the nullable
-                    // pattern-match transform is suppressed, so the emission is
-                    // already `bool` in C# (lifted `>` on `T?`); adding `?? false`
-                    // would produce `bool ?? false` (CS0019).
-                    if (!TriviaConvertingExpressionVisitor.IsWithinQuery &&
-                        node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader) {
+                    // Skip the `?? false` bool wrap in query/expression-tree
+                    // context: there the nullable pattern-match transform is
+                    // suppressed, so the emission is already `bool` in C#
+                    // (lifted `>` on `T?`); adding `?? false` would produce
+                    // `bool ?? false` (CS0019). Numeric unwrap is still safe
+                    // in expression trees — EF translates `?? 0m` cleanly.
+                    if (node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader) {
                         var bodyType = _semanticModel.GetTypeInfo(node.Body).Type;
                         var lambdaConverted = _semanticModel.GetTypeInfo(node).ConvertedType as INamedTypeSymbol;
                         var delegateReturn = lambdaConverted?.DelegateInvokeMethod?.ReturnType;
-                        bool bodyIsNullableBool = bodyType != null && bodyType.IsNullable(out var underlying)
-                                                  && underlying?.SpecialType == SpecialType.System_Boolean;
-                        bool wantsBool = delegateReturn?.SpecialType == SpecialType.System_Boolean;
-                        if (bodyIsNullableBool && wantsBool) {
-                            csNode = SyntaxFactory.BinaryExpression(
-                                SyntaxKind.CoalesceExpression,
-                                csNode.AddParens(),
-                                LiteralConversions.GetLiteralExpression(false));
+                        ITypeSymbol underlying = null;
+                        bool bodyIsNullable = bodyType != null && bodyType.IsNullable(out underlying) && underlying != null;
+                        if (bodyIsNullable && underlying != null && delegateReturn != null &&
+                            SymbolEqualityComparer.Default.Equals(delegateReturn, underlying)) {
+                            ExpressionSyntax defaultLiteral = underlying.SpecialType switch {
+                                SpecialType.System_Boolean when !TriviaConvertingExpressionVisitor.IsWithinQuery
+                                    => LiteralConversions.GetLiteralExpression(false),
+                                SpecialType.System_Boolean => null, // bool? in expression-tree — skip (see comment above)
+                                _ when underlying.IsNumericType()
+                                    => SyntaxFactory.LiteralExpression(SyntaxKind.DefaultLiteralExpression,
+                                        SyntaxFactory.Token(SyntaxKind.DefaultKeyword)),
+                                _ => null
+                            };
+                            if (defaultLiteral != null) {
+                                csNode = SyntaxFactory.BinaryExpression(
+                                    SyntaxKind.CoalesceExpression,
+                                    csNode.AddParens(),
+                                    defaultLiteral);
+                            }
                         }
                     }
                     var expressionBodyStatement = SyntaxFactory.ExpressionStatement(csNode);

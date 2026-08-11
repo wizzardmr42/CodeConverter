@@ -1578,10 +1578,50 @@ CS1023: Embedded statement cannot be a declaration or labeled statement");
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS0266 `decimal?` → `decimal` (8 sites). VB Nothing-propagating math produces `decimal?` where assignment expects `decimal`. Similar to bool? unwrap but for arithmetic — likely needs `?? 0m` unwrap in specific contexts")]
-    public async Task NullableDecimalToDecimalAssignmentAsync()
+    [Fact]
+    public async Task NullableDecimalLambdaBodyIsUnwrappedForDecimalDelegateAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // Extends the bool? lambda unwrap to numeric types. VB `Function(oi)
+        // (From x In items Select If(cond, x.A, x.B)).Sum()` — the ternary
+        // yields `decimal?` when either arm is nullable, `.Sum()` returns
+        // `decimal?`, and the containing Expression<Func<..., decimal>> lambda
+        // expects `decimal`. C# rejects `decimal?` → `decimal` (CS0266).
+        //
+        // Fix: unwrap the body with `?? default` when the target delegate
+        // return type matches the body's underlying non-nullable type.
+        // Works in expression-tree context too — EF translates `?? 0m`
+        // cleanly.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Item
+    Public Property Amount As Decimal?
+End Class
+
+Public Module M
+    Public Function Total(items As IEnumerable(Of Item)) As Decimal
+        Dim getTotal As Func(Of IEnumerable(Of Item), Decimal) = Function(xs) xs.Sum(Function(x) x.Amount)
+        Return getTotal(items)
+    End Function
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Item
+{
+    public decimal? Amount { get; set; }
+}
+
+public static partial class M
+{
+    public static decimal Total(IEnumerable<Item> items)
+    {
+        Func<IEnumerable<Item>, decimal> getTotal = xs => xs.Sum(x => x.Amount) ?? default;
+        return getTotal(items);
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0266 `bool?` → `bool` (5 remaining sites). Sites the lambda-body unwrap didn't cover — likely non-lambda contexts (assignments, ternaries in expression trees)")]
