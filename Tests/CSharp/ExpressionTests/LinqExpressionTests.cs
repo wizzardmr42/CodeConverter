@@ -1986,6 +1986,53 @@ public static partial class M
     }
 
     [Fact]
+    public async Task SelfReferenceCheckIgnoresQualifierSharingLocalNameAsync()
+    {
+        // The CS0165 self-referential-lambda fix must not misfire when the
+        // initializer references a TYPE or NAMESPACE that shares its final
+        // identifier with the local being declared:
+        //   Dim MarketPlace = Api.MarketPlace.GetById(...)
+        // Text-only name matching would treat `MarketPlace` under `Api.` as a
+        // self-reference and split into `... = default; ... = <init>;` —
+        // giving CS8716 "There is no target type for the default literal".
+        //
+        // Fix uses semantic symbol resolution to confirm the identifier binds
+        // to the declared local (ILocalSymbol) before triggering the split.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class Api
+    Public Class MarketPlace
+        Public Shared Function GetById(id As Integer) As String
+            Return """"
+        End Function
+    End Class
+End Class
+
+Public Module M
+    Public Sub Do1(id As Integer)
+        Dim MarketPlace = Api.MarketPlace.GetById(id)
+    End Sub
+End Module",
+            @"
+public partial class Api
+{
+    public partial class MarketPlace
+    {
+        public static string GetById(int id)
+        {
+            return """";
+        }
+    }
+}
+
+public static partial class M
+{
+    public static void Do1(int id)
+    {
+        string MarketPlace = Api.MarketPlace.GetById(id);
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelfReferentialLambdaSplitsIntoDeclareThenAssignAsync()
     {
         // VB `Dim rec = Function(x) rec(x - 1)` works because VB implicitly

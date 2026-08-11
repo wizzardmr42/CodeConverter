@@ -106,10 +106,20 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
     private bool TryEmitAsSelfReferentialSplit(VBSyntax.VariableDeclaratorSyntax declarator, SyntaxTokenList modifiers, List<LocalDeclarationStatementSyntax> localDeclarationStatementSyntaxs, List<StatementSyntax> declarations)
     {
         if (declarator.Initializer is not VBSyntax.EqualsValueSyntax evs) return false;
-        var declaratorNames = new HashSet<string>(declarator.Names.Select(n => n.Identifier.ValueText), StringComparer.Ordinal);
-        var referencedNames = evs.Value.DescendantNodesAndSelf().OfType<VBSyntax.IdentifierNameSyntax>()
-            .Select(id => id.Identifier.ValueText);
-        if (!referencedNames.Any(n => declaratorNames.Contains(n))) return false;
+        var declaratorSymbols = declarator.Names.Select(n => _semanticModel.GetDeclaredSymbol(n))
+            .OfType<ILocalSymbol>()
+            .ToList();
+        if (declaratorSymbols.Count == 0) return false;
+        // Look for identifiers in the initializer whose semantic symbol is
+        // the LOCAL being declared. Text-only comparison misfires for
+        // qualifier names in a MemberAccess (e.g. VB `Dim MarketPlace =
+        // Api.MarketPlace.GetById(...)` — the `MarketPlace` under `Api.` is
+        // a type, not the local — CS8716 when the initializer got emitted as
+        // `default`).
+        bool anySelfRef = evs.Value.DescendantNodesAndSelf().OfType<VBSyntax.IdentifierNameSyntax>()
+            .Any(id => _semanticModel.GetSymbolInfo(id).Symbol is ILocalSymbol s
+                       && declaratorSymbols.Any(d => SymbolEqualityComparer.Default.Equals(d, s)));
+        if (!anySelfRef) return false;
 
         foreach (var single in localDeclarationStatementSyntaxs) {
             var singleDecl = single.Declaration;
