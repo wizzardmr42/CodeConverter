@@ -1878,10 +1878,37 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0165 use of unassigned local (2 sites, AddReplacementRREs/combineRoute). VB permits reading a possibly-unassigned local via `If var IsNot Nothing`; C# needs definite assignment. Init to default")]
-    public async Task DefinitelyAssignLocalWithDefaultAsync()
+    [Fact]
+    public async Task SelfReferentialLambdaSplitsIntoDeclareThenAssignAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `Dim rec = Function(x) rec(x - 1)` works because VB implicitly
+        // initialises `rec` to Nothing before evaluating the initializer.
+        // C# requires definite assignment before use — the `rec(x - 1)` in
+        // the lambda body would fire CS0165 "use of unassigned local".
+        //
+        // Fix: split into `T rec = default; rec = <init>;` so the lambda
+        // body's self-reference sees a definitely-assigned local.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+
+Public Module M
+    Public Sub Do1()
+        Dim rec As Action(Of Integer) = Sub(x)
+                                            If x > 0 Then rec(x - 1)
+                                        End Sub
+        rec(3)
+    End Sub
+End Module",
+            @"using System;
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        Action<int> rec = default;
+        rec = x => { if (x > 0) rec(x - 1); };
+        rec(3);
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0136 local name conflict with enclosing scope (2 sites, ItemPrice). C# lambda parameter shadowing rules stricter than VB — need to rename inner")]

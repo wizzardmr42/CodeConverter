@@ -94,8 +94,46 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         }
     }
 
+    /// <summary>
+    /// VB `Dim rec As Action(Of T) = Function(x) ... rec(y) ...` works
+    /// because VB implicitly initialises the local to Nothing before
+    /// evaluating the initializer. C# requires definite assignment before
+    /// use — the self-reference inside the lambda body would fire CS0165.
+    /// Split into two statements: `Action&lt;T&gt; rec = default; rec = <init>;`
+    /// so the lambda body's self-reference sees a definitely-assigned local.
+    /// Returns true if the split was applied (and appended to <paramref name="declarations"/>).
+    /// </summary>
+    private bool TryEmitAsSelfReferentialSplit(VBSyntax.VariableDeclaratorSyntax declarator, SyntaxTokenList modifiers, List<LocalDeclarationStatementSyntax> localDeclarationStatementSyntaxs, List<StatementSyntax> declarations)
+    {
+        if (declarator.Initializer is not VBSyntax.EqualsValueSyntax evs) return false;
+        var declaratorNames = new HashSet<string>(declarator.Names.Select(n => n.Identifier.ValueText), StringComparer.Ordinal);
+        var referencedNames = evs.Value.DescendantNodesAndSelf().OfType<VBSyntax.IdentifierNameSyntax>()
+            .Select(id => id.Identifier.ValueText);
+        if (!referencedNames.Any(n => declaratorNames.Contains(n))) return false;
+
+        foreach (var single in localDeclarationStatementSyntaxs) {
+            var singleDecl = single.Declaration;
+            var variablesWithInits = singleDecl.Variables.Where(v => v.Initializer != null).ToList();
+            if (variablesWithInits.Count != 1) {
+                declarations.Add(single);
+                continue;
+            }
+            var vd = variablesWithInits[0];
+            var withoutInit = singleDecl.WithVariables(SyntaxFactory.SingletonSeparatedList(
+                vd.WithInitializer(SyntaxFactory.EqualsValueClause(
+                    SyntaxFactory.LiteralExpression(SyntaxKind.DefaultLiteralExpression,
+                        SyntaxFactory.Token(SyntaxKind.DefaultKeyword))))));
+            declarations.Add(SyntaxFactory.LocalDeclarationStatement(modifiers, withoutInit));
+            declarations.Add(SyntaxFactory.ExpressionStatement(
+                SyntaxFactory.AssignmentExpression(SyntaxKind.SimpleAssignmentExpression,
+                    ValidSyntaxFactory.IdentifierName(vd.Identifier),
+                    vd.Initializer.Value)));
+        }
+        return true;
+    }
+
     public override async Task<SyntaxList<StatementSyntax>> VisitLocalDeclarationStatement(VBSyntax.LocalDeclarationStatementSyntax node)
-    {  
+    {
         var modifiers = CommonConversions.ConvertModifiers(node.Declarators[0].Names[0], node.Modifiers, TokenContext.Local);
         var isConst = modifiers.Any(a => a.IsKind(SyntaxKind.ConstKeyword));
         var isVBStatic = node.Modifiers.Any(a => a.IsKind(VBasic.SyntaxKind.StaticKeyword));
@@ -137,9 +175,12 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
                 if (shouldPullVariablesBeforeLoop) {
                     localDeclarationStatementSyntaxs = HoistVariablesBeforeLoopWhenNeeded(variables)
                         .Select(variableDecl => SyntaxFactory.LocalDeclarationStatement(modifiers, variableDecl));
+                    declarations.AddRange(localDeclarationStatementSyntaxs);
+                } else if (TryEmitAsSelfReferentialSplit(declarator, modifiers, localDeclarationStatementSyntaxs.ToList(), declarations)) {
+                    // Recursive-lambda pattern handled — declarations updated in-place.
+                } else {
+                    declarations.AddRange(localDeclarationStatementSyntaxs);
                 }
-
-                declarations.AddRange(localDeclarationStatementSyntaxs);
             }
             var localFunctions = methods.Cast<LocalFunctionStatementSyntax>();
             declarations.AddRange(localFunctions);
