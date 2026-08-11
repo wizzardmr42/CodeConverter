@@ -1506,4 +1506,183 @@ public static partial class M
     }
 }");
     }
+
+    // -------------------------------------------------------------------
+    // TDD markers for remaining known BMCore clusters — each Skip= reason
+    // documents the pattern + count + intended fix. Un-skip to work on it.
+    // -------------------------------------------------------------------
+
+    [Fact(Skip = "TDD: Anon-type member named `AsEnumerable` shadowed by extension method resolution (CS1929 x21, BMContext.Caching + TemplateDataStore + ListingDataUpdater). VB `Group By x Into AsEnumerable` → C# `new { AsEnumerable = Group.AsEnumerable() }`; later `.AsEnumerable.Select(...)` — C# resolver picks the extension method not the property. Fix: rename the projected member (e.g. `AsEnumerableGroup`) or emit method-chain form")]
+    public async Task AnonTypeMemberNamedAsEnumerableResolvesToPropertyAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1929 `IGrouping.Sum()` (7 sites) — still emitted for some Group.Sum without arg after agg-arg fix. Needs a repro showing where CreateGroupByProjectionAsync path isn't reached")]
+    public async Task IGroupingSumRemainingSitesAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1503 `TKey` → `Guid` (10 sites). Generic dictionary extension called on `Dictionary<Guid, T>` where TKey should bind Guid but codeconv drops type args")]
+    public async Task DictionaryExtensionMethodGenericInferenceAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1503 `T` → concrete type (5 sites, WaveBuilder+UpdateStockItemPurchasePricesTask). Loop var in an untyped List<T> context can't add to concrete-typed list — needs type-constraint recovery from enclosing method")]
+    public async Task GenericTLoopVarToConcreteListAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0266 `decimal?` → `decimal` (8 sites). VB Nothing-propagating math produces `decimal?` where assignment expects `decimal`. Similar to bool? unwrap but for arithmetic — likely needs `?? 0m` unwrap in specific contexts")]
+    public async Task NullableDecimalToDecimalAssignmentAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0266 `bool?` → `bool` (5 remaining sites). Sites the lambda-body unwrap didn't cover — likely non-lambda contexts (assignments, ternaries in expression trees)")]
+    public async Task RemainingNullableBoolToBoolContextsAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0266 `string` → `SqlQueryWithParameters` (3 sites). VB widens String to SqlQueryWithParameters via `Widening Operator CType`. Codeconv drops the implicit conversion at assignment sites")]
+    public async Task StringToSqlQueryWithParametersImplicitConversionAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0266 `double` → `decimal?` (3 sites). VB's implicit numeric widening not applied in assignment context")]
+    public async Task DoubleToNullableDecimalAssignmentAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0266 `int` → `ushort` (2 sites). Narrowing needs explicit cast")]
+    public async Task IntToUShortNarrowingAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0266 `IQueryable<T>` → `DbSet<T>` (2 sites). Codeconv preserves .Where() result assigned back to a DbSet-typed variable — need to reassign as IQueryable or peel the .Where")]
+    public async Task QueryableAssignedBackToDbSetAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1662 remaining lambda-return sites (15). Non-Where/Any predicates that still emit bool? bodies for a bool delegate — likely OrderBy/GroupBy key selectors and similar")]
+    public async Task RemainingLambdaReturnTypeMismatchAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS7036 `Parallel` missing arg (~8 sites) + assorted (14 total). Extension method with ByRef/optional params, receiver dropped even after Me fix — need to inspect specific call sites")]
+    public async Task RemainingMissingRequiredArgAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0120 + CS0119 type-as-member (21 combined sites, GetUnitDataFromPO). Chained VB Select `Select pold.PurchaseOrderLine, pold Select pold, PurchaseOrderLine, PurchaseOrderLine.StockItem` — the second Select re-projects promoted names as if they were the range var. Transparent-Select fix should reach this once let-emission handles the promoted-name chain")]
+    public async Task ChainedTransparentSelectPromotedNameReuseAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0029 `short` → `bool` (WavePrioritiser) — VB comparison to non-Boolean result in Boolean context")]
+    public async Task ShortToBoolInBooleanContextAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0029 enum → bool (HeartBeat) — same shape as above but enum. VB permits `If someEnum Then ...` if enum has None=0; C# needs `!= 0`")]
+    public async Task EnumToBoolInBooleanContextAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0029 Thread[] → ScrapingFakeMachine[] (AmazonScraper). Array covariance/downcast mismatch — VB permits, C# needs explicit cast per element")]
+    public async Task ArrayCovariantDowncastAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0411 `TryGetIEnumerableOrEmpty<TKey,TElem>` inference (5 sites). Generic extension method type-arg inference fails after receiver simplification — need explicit type args")]
+    public async Task GenericExtensionMethodTypeArgsExplicitAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1930 `range variable X already declared` (3 sites). Two `into Group` continuations in same query — need unique group identifier per Group By")]
+    public async Task NestedGroupByUniqueGroupIdentifierAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1937/1938 `name not in scope on X side of equals` (4 sites). Join order matters in C# but VB is permissive — swap sides")]
+    public async Task JoinEqualsOperandOrderSwapAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1936 no query pattern on TValue (2 sites). Generic type argument used as query source — needs interface constraint check or fallback")]
+    public async Task GenericTValueAsQuerySourceAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1656 cannot assign to foreach iteration variable (3 sites). VB permits reassigning For Each var, C# does not — need to rewrite as regular for-loop or use a mutable local")]
+    public async Task ForEachIterationVariableReassignmentAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1618 delegate from method with Conditional attribute (3 sites — Debug.WriteLine). Need to wrap in a lambda instead of method-group conversion")]
+    public async Task ConditionalMethodDelegateWrapAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0236 field initializer references non-static member (2 sites, LBoardConfig). Move the initialization to constructor")]
+    public async Task FieldInitializerReferencingInstanceMemberAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0117 int has no HasValue/Value (2 sites). VB's nullable-vs-non-nullable was smart, C# emission accidentally treats non-nullable as nullable")]
+    public async Task NonNullableIntTreatedAsNullableAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0165 use of unassigned local (2 sites, AddReplacementRREs/combineRoute). VB permits reading a possibly-unassigned local via `If var IsNot Nothing`; C# needs definite assignment. Init to default")]
+    public async Task DefinitelyAssignLocalWithDefaultAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0136 local name conflict with enclosing scope (2 sites, ItemPrice). C# lambda parameter shadowing rules stricter than VB — need to rename inner")]
+    public async Task LambdaParamShadowingEnclosingLocalAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS0030 Func<T, bool?> → Func<T, bool> (3 sites, DispatchScheduleRule). Passing an outer-nullable-bool predicate to a bool-Func parameter — needs unwrap wrapper lambda")]
+    public async Task NullableBoolFuncToBoolFuncAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1023 embedded statement invalid (3 sites). Multi-statement If-then without End If in VB emitted without a block in C#")]
+    public async Task InlineIfMultiStatementBlockAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
+
+    [Fact(Skip = "TDD: CS1003 syntax error (4 sites). Investigate individually")]
+    public async Task RemainingSyntaxErrorsAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+    }
 }
