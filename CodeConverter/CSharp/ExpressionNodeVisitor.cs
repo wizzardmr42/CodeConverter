@@ -1313,7 +1313,12 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     public override async Task<CSharpSyntaxNode> VisitSingleLineLambdaExpression(VBasic.Syntax.SingleLineLambdaExpressionSyntax node)
     {
         var originalIsWithinQuery = TriviaConvertingExpressionVisitor.IsWithinQuery;
-        TriviaConvertingExpressionVisitor.IsWithinQuery = CommonConversions.IsLinqDelegateExpression(node);
+        // OR with the outer flag: a Func-typed lambda nested inside an
+        // Expression<Func<...>> is still inside the outer expression tree
+        // (EF etc. inline the whole shape when translating to SQL), so the
+        // pattern-match null-safe transforms remain illegal — emit them and
+        // you get CS8122 "expression tree may not contain 'is' pattern".
+        TriviaConvertingExpressionVisitor.IsWithinQuery = originalIsWithinQuery || CommonConversions.IsLinqDelegateExpression(node);
         try {
             return await ConvertInnerAsync();
         } finally {
@@ -1417,7 +1422,12 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     public override async Task<CSharpSyntaxNode> VisitMultiLineLambdaExpression(VBasic.Syntax.MultiLineLambdaExpressionSyntax node)
     {
         var originalIsWithinQuery = TriviaConvertingExpressionVisitor.IsWithinQuery;
-        TriviaConvertingExpressionVisitor.IsWithinQuery = CommonConversions.IsLinqDelegateExpression(node);
+        // OR with the outer flag: a Func-typed lambda nested inside an
+        // Expression<Func<...>> is still inside the outer expression tree
+        // (EF etc. inline the whole shape when translating to SQL), so the
+        // pattern-match null-safe transforms remain illegal — emit them and
+        // you get CS8122 "expression tree may not contain 'is' pattern".
+        TriviaConvertingExpressionVisitor.IsWithinQuery = originalIsWithinQuery || CommonConversions.IsLinqDelegateExpression(node);
         try {
             return await ConvertInnerAsync();
         } finally {
