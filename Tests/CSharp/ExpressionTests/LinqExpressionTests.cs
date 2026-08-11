@@ -1404,25 +1404,27 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: VB decimal + double numeric promotion — codeconv drops the conversion, C# rejects mixed arithmetic (CS0019)")]
+    [Fact]
     public async Task DecimalPlusDoublePromotesToDecimalAsync()
     {
         // VB permits `decimalVal + doubleVal` — implicitly promotes one to
-        // the other. Codeconv emits `decimalVal + doubleVal` directly and
-        // C# rejects `decimal + double` with CS0019.
-        //
-        // Correct: cast the double to decimal (or vice versa depending on
-        // the target/context). Common pattern in report calculations.
+        // the other. Codeconv's TypeConversionAnalyzer already handles the
+        // simple case: emit `(decimal)((double)a + b)` (promote to double,
+        // widen result back). Regression test only — BMCore's remaining
+        // CS0019 `decimal + double` sites (ProvisionReportModel etc.) hit a
+        // more complex variant where the conversion doesn't trigger; those
+        // still need investigation.
         await TestConversionVisualBasicToCSharpAsync(@"Public Module M
     Public Function Add(a As Decimal, b As Double) As Decimal
         Return a + b
     End Function
 End Module",
-            @"public static partial class M
+            @"
+public static partial class M
 {
     public static decimal Add(decimal a, double b)
     {
-        return a + (decimal)b;
+        return (decimal)((double)a + b);
     }
 }");
     }
