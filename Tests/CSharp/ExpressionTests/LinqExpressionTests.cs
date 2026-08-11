@@ -33,6 +33,7 @@ public partial class Issue895
         var numbers = new List<int>() { 1, 2, 3, 4, 4 };
         var duplicates = from x in numbers
                          group x by x into Group
+                         let x = Group.Key
                          where Group.Count() > 1
                          select Group;
         Console.WriteLine(duplicates.Count());
@@ -73,13 +74,11 @@ public static partial class Module1
         var list = new List<C>();
         var result = from f in list
                      group f by f.MyString into @group
+                     let MyString = @group.Key
                      orderby MyString
                      select @group;
     }
-}
-1 target compilation errors:
-CS0103: The name 'MyString' does not exist in the current context");
-        // BUG: Order by should be on @group.Key
+}");
     }
 
     [Fact]

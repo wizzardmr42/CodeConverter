@@ -201,11 +201,15 @@ internal class QueryConverter
                                 ValidSyntaxFactory.IdentifierName("Key")));
                         continuationClauses = continuationClauses.Add(letGroupKey);
                     }
-                    // Also add lets for EXPLICITLY-named aggregation variables so
-                    // `Select <aggName>` in the nested clause works. Bare `Into Group`
-                    // doesn't need a let — the group identifier already binds it.
+                    // Also add lets for aggregation variables so `Select <aggName>`
+                    // works. Sources of the aggregation NAME:
+                    //   - Explicit `Into <name> = <expr>`      -> NameEquals
+                    //   - Bare `Into <FuncName>` (function agg) -> FunctionName
+                    //   - Bare `Into Group`                     -> no let, handled via group identifier
                     foreach (var agg in gcs.AggregationVariables) {
-                        if (agg.NameEquals?.Identifier.Identifier is not { } aggName) continue;
+                        SyntaxToken? aggNameTokenOrNull = agg.NameEquals?.Identifier.Identifier
+                            ?? (agg.Aggregation is VBSyntax.FunctionAggregationSyntax fnAgg ? fnAgg.FunctionName : (SyntaxToken?)null);
+                        if (aggNameTokenOrNull is not { } aggName) continue;
                         // Skip if the aggregation is bare Group and its explicit name
                         // matches the group identifier — that becomes `let g = g` which
                         // C# rejects (self-referential range variable).
@@ -382,9 +386,13 @@ internal class QueryConverter
     // gives downstream access, so we don't need a projection there.
     private static bool RequiresProjectionContinuation(VBSyntax.GroupByClauseSyntax gcs, List<string> groupKeyIds)
     {
-        // Only when we didn't emit a let for single-key AND VB has an `Into`
-        // aggregation that names an anonymous field the downstream depends on.
-        return groupKeyIds.Count != 1 && gcs.AggregationVariables.Any();
+        // Any Into <aggregation> requires a projection continuation, because VB
+        // promotes both the key(s) and the aggregation(s) to the anonymous shape
+        // downstream code will use. An IGrouping<K,T> alone doesn't expose the
+        // aggregation as a member — it needs the explicit select projection.
+        // The single-key path adds a `let <keyName> = @group.Key` in the
+        // continuation clauses, but without a continuation those lets are dropped.
+        return gcs.AggregationVariables.Any();
     }
 
     private async Task<CSSyntax.SelectClauseSyntax> CreateGroupByProjectionAsync(VBSyntax.GroupByClauseSyntax gcs, SyntaxToken groupName)
@@ -396,20 +404,27 @@ internal class QueryConverter
             ValidSyntaxFactory.IdentifierName("Key"));
 
         var members = new List<CSSyntax.AnonymousObjectMemberDeclaratorSyntax>();
+        bool singleKey = gcs.Keys.Count == 1;
 
-        // For each key, emit `@group.Key.<name>` — C# infers the property name
-        // from the trailing member access, so we don't need an explicit
-        // NameEquals unless we had to invent one.
+        // For each key:
+        //   Single key → `<name> = @group.Key` (Key IS the value directly, no anon type).
+        //   Multi key  → `@group.Key.<name>` (Key IS an anon type; member access exposes name).
         int keyIndex = 0;
         foreach (var key in gcs.Keys) {
             var nameToken = key.NameEquals?.Identifier.Identifier
                             ?? key.Expression.ExtractAnonymousTypeMemberName()
                             ?? SyntaxFactory.Identifier("key" + keyIndex);
-            var memberAccess = SyntaxFactory.MemberAccessExpression(
-                SyntaxKind.SimpleMemberAccessExpression,
-                keyAccess,
-                ValidSyntaxFactory.IdentifierName(nameToken.Text));
-            members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(memberAccess));
+            if (singleKey) {
+                members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(
+                    SyntaxFactory.NameEquals(ValidSyntaxFactory.IdentifierName(nameToken.Text)),
+                    keyAccess));
+            } else {
+                var memberAccess = SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    keyAccess,
+                    ValidSyntaxFactory.IdentifierName(nameToken.Text));
+                members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(memberAccess));
+            }
             keyIndex++;
         }
 
@@ -418,8 +433,14 @@ internal class QueryConverter
         // - `Into Foo = Count()` etc.: apply the function to the group
         int aggIndex = 0;
         foreach (var agg in gcs.AggregationVariables) {
+            // Aggregation name sources:
+            //   Into <name> = ...           -> NameEquals
+            //   Into Group                  -> literal "Group"
+            //   Into <FuncName> (bare)      -> FunctionName from FunctionAggregationSyntax
             var aggName = agg.NameEquals?.Identifier.Identifier.Text
-                          ?? (agg.Aggregation is VBSyntax.GroupAggregationSyntax ? "Group" : "agg" + aggIndex);
+                          ?? (agg.Aggregation is VBSyntax.FunctionAggregationSyntax fnAgg ? fnAgg.FunctionName.Text
+                              : agg.Aggregation is VBSyntax.GroupAggregationSyntax ? "Group"
+                              : "agg" + aggIndex);
             CSSyntax.ExpressionSyntax aggExpr;
             switch (agg.Aggregation) {
                 case VBSyntax.GroupAggregationSyntax:
@@ -476,7 +497,15 @@ internal class QueryConverter
 
     private static IEnumerable<string> GetGroupKeyIdentifiers(VBSyntax.GroupByClauseSyntax gs)
     {
-        return gs.Keys.Select(k => k.NameEquals?.Identifier.Identifier.Text)
+        // A key's identifier comes from either:
+        //   `k = <expr>`  -> NameEquals identifier (explicit)
+        //   `<obj>.<Prop>` (bare) -> the trailing member access identifier (implicit,
+        //                             matches VB's anonymous type naming rule)
+        // The implicit case matters for the single-key `Group By x.Foo` shape —
+        // downstream code references `Foo` bare, so we need a `let Foo = @group.Key`.
+        return gs.Keys
+            .Select(k => k.NameEquals?.Identifier.Identifier.Text
+                         ?? k.Expression.ExtractAnonymousTypeMemberName()?.Text)
             .Where(x => x != null);
     }
 
