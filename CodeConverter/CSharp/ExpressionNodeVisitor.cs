@@ -767,9 +767,36 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     {
         var leftSide = await node.FirstExpression.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
         var rightSide = await node.SecondExpression.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
-        var expr = SyntaxFactory.BinaryExpression(SyntaxKind.CoalesceExpression,
-            node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide),
-            node.SecondExpression.ParenthesizeIfPrecedenceCouldChange(rightSide));
+        // VB `If(x, default)` accepts any default convertible to x's
+        // underlying type (int for nullable enum, string via ToString, etc.).
+        // C# `??` requires the two sides to share a common type. Handle two
+        // BMCore-observed cases:
+        //   (a) `TEnum? ?? int` — cast the default to TEnum.
+        //   (b) `T? ?? string` where T is not string — VB's implicit
+        //       stringification. Rewrite LHS as `x?.ToString() ?? default`.
+        var leftType = _semanticModel.GetTypeInfo(node.FirstExpression).Type;
+        var rightType = _semanticModel.GetTypeInfo(node.SecondExpression).Type;
+        ExpressionSyntax leftForBinary = node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide);
+        ExpressionSyntax rightForBinary = node.SecondExpression.ParenthesizeIfPrecedenceCouldChange(rightSide);
+        if (leftType != null && leftType.IsNullable(out var leftUnderlying) && leftUnderlying != null) {
+            bool rhsIsString = rightType?.SpecialType == SpecialType.System_String;
+            bool underlyingIsString = leftUnderlying.SpecialType == SpecialType.System_String;
+            if (leftUnderlying.TypeKind == TypeKind.Enum &&
+                rightType != null && rightType.SpecialType != SpecialType.None &&
+                !SymbolEqualityComparer.Default.Equals(rightType, leftUnderlying)) {
+                var typeName = (TypeSyntax)CommonConversions.CsSyntaxGenerator.TypeExpression(leftUnderlying);
+                rightForBinary = ValidSyntaxFactory.CastExpression(typeName, rightSide);
+            } else if (rhsIsString && !underlyingIsString) {
+                // Rewrite `x ?? "default"` (x is `T?`) to `x?.ToString() ?? "default"`.
+                var toStringCall = SyntaxFactory.InvocationExpression(
+                    SyntaxFactory.MemberBindingExpression(ValidSyntaxFactory.IdentifierName(nameof(object.ToString))),
+                    SyntaxFactory.ArgumentList());
+                leftForBinary = SyntaxFactory.ConditionalAccessExpression(
+                    node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide),
+                    toStringCall);
+            }
+        }
+        var expr = SyntaxFactory.BinaryExpression(SyntaxKind.CoalesceExpression, leftForBinary, rightForBinary);
 
         if (node.Parent.IsKind(VBasic.SyntaxKind.Interpolation) || node.PrecedenceCouldChange())
             return SyntaxFactory.ParenthesizedExpression(expr);

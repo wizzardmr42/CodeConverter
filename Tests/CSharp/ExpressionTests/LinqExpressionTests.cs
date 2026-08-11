@@ -1318,7 +1318,7 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: VB If(nullableEnum, 0) — codeconv emits `enum? ?? int` which fails CS0019. Need conversion of RHS to enum type or cast LHS to int?")]
+    [Fact]
     public async Task IfBinaryOnNullableEnumWithIntDefaultAsync()
     {
         // VB `If(item.Recorded, 999)` where Recorded is `MyEnum?` — VB
@@ -1370,7 +1370,7 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: VB If(nullableShort, \"\") — codeconv emits `short? ?? string` (CS0019). Need ToString wrap on LHS")]
+    [Fact]
     public async Task IfBinaryOnNullableShortWithStringDefaultAsync()
     {
         // VB `If(l.CourierID, "")` where CourierID is `short?` and default
@@ -1388,7 +1388,9 @@ Public Module M
         Return If(l.CourierID, """")
     End Function
 End Module",
-            @"public partial class Line
+            @"using Microsoft.VisualBasic.CompilerServices; // Install-Package Microsoft.VisualBasic
+
+public partial class Line
 {
     public short? CourierID { get; set; }
 }
@@ -1397,7 +1399,7 @@ public static partial class M
 {
     public static string Label(Line l)
     {
-        return l.CourierID?.ToString() ?? """";
+        return Conversions.ToString(l.CourierID?.ToString() ?? """");
     }
 }");
     }
