@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Immutable;
+using System.Linq;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
@@ -542,7 +543,7 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         elseClause = elseClause.WithVbSourceMappingFrom(node.ElseBlock); //Special case where explicit mapping is needed since block becomes clause so cannot be easily visited
 
         var elseIfBlocks = await node.ElseIfBlocks.SelectAsync(async elseIf => await ConvertElseIfAsync(elseIf));
-        foreach (var elseIf in elseIfBlocks.Reverse()) {
+        foreach (var elseIf in Enumerable.Reverse(elseIfBlocks)) {
             var ifStmt = SyntaxFactory.IfStatement(elseIf.ElseIfCondition, elseIf.ElseBlock, elseClause);
             elseClause = SyntaxFactory.ElseClause(ifStmt);
         }
