@@ -107,11 +107,11 @@ public partial class Issue635
 
     public Issue635()
     {
-        listSelectWhere = from t in
+        listSelectWhere = from foo in
                               from t in l
                               select t.foo
                           where 1 == 2
-                          select t;
+                          select foo;
     }
 }");
     }
@@ -1512,10 +1512,52 @@ public static partial class M
     // documents the pattern + count + intended fix. Un-skip to work on it.
     // -------------------------------------------------------------------
 
-    [Fact(Skip = "TDD: Anon-type member named `AsEnumerable` shadowed by extension method resolution (CS1929 x21, BMContext.Caching + TemplateDataStore + ListingDataUpdater). VB `Group By x Into AsEnumerable` → C# `new { AsEnumerable = Group.AsEnumerable() }`; later `.AsEnumerable.Select(...)` — C# resolver picks the extension method not the property. Fix: rename the projected member (e.g. `AsEnumerableGroup`) or emit method-chain form")]
+    [Fact(Skip = "TDD REVISED: Anon-type member named `AsEnumerable` (CS1929 x21) — the isolated test scenario COMPILES cleanly (see body), so the CS1929 in BMCore must have a context-dependent cause. Suspicion: `<Reference Include=\"System.Data.DataSetExtensions\" />` + `using System.Data` in the BMCore project brings DataTableExtensions.AsEnumerable into scope and confuses resolution somehow — but a minimal repro that mirrors that context also passes. Investigate against actual BMCore build (not test scaffold) before fixing")]
     public async Task AnonTypeMemberNamedAsEnumerableResolvesToPropertyAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // Keep the reproducer for future investigation. The emission itself
+        // is `g.AsEnumerable` accessing the anon-type property — that shape
+        // works here (only CS1023 unrelated fires from the missing braces).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Row
+    Public Property CountryID As Short
+    Public Property Value As Integer
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim rows As New List(Of Row)
+        For Each item In (From r In rows Group By cid = r.CountryID Into AsEnumerable).ToList
+            Dim d = (From x In item.AsEnumerable Select x.Value).ToList
+        Next
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Row
+{
+    public short CountryID { get; set; }
+    public int Value { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var rows = new List<Row>();
+        foreach (var item in (from r in rows
+                              group r by r.CountryID into Group
+                              let cid = Group.Key
+                              select new { cid = Group.Key, AsEnumerable = Group.AsEnumerable() }).ToList())
+            var d = (from x in item.AsEnumerable
+                     select x.Value).ToList();
+    }
+}
+1 target compilation errors:
+CS1023: Embedded statement cannot be a declaration or labeled statement");
     }
 
     [Fact(Skip = "TDD: CS1929 `IGrouping.Sum()` (7 sites) — still emitted for some Group.Sum without arg after agg-arg fix. Needs a repro showing where CreateGroupByProjectionAsync path isn't reached")]
@@ -1650,10 +1692,59 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS0117 int has no HasValue/Value (2 sites). VB's nullable-vs-non-nullable was smart, C# emission accidentally treats non-nullable as nullable")]
-    public async Task NonNullableIntTreatedAsNullableAsync()
+    [Fact]
+    public async Task SingleItemSelectRenamesOuterRangeVarAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `From sl In src Select sl.WarehouseLocationID Where WarehouseLocationID.HasValue`
+        // — the single-item Select renames the range variable to
+        // `WarehouseLocationID` (VB implicit name from the member access).
+        // Subsequent clauses in the same query reference `WarehouseLocationID`
+        // directly.
+        //
+        // Codeconv emits the inner Select correctly but the OUTER segment's
+        // `from` still uses the original `sl` name, so the bare
+        // `WarehouseLocationID` reference in Where/Select becomes CS0117 /
+        // CS0103 (compiler mistakes `WarehouseLocationID` for a type name).
+        //
+        // Fix: when a segment's queryEnd is a single-item Select whose item
+        // has an implicit or explicit name, use THAT name for the next
+        // segment's FromClause range variable.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Loc
+    Public Property WarehouseLocationID As Integer?
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim locs As New List(Of Loc)
+        Dim ids = (From sl In locs
+                   Select sl.WarehouseLocationID
+                   Where WarehouseLocationID.HasValue
+                   Select WarehouseLocationID.Value).Distinct().ToArray()
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Loc
+{
+    public int? WarehouseLocationID { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var locs = new List<Loc>();
+        int[] ids = (from WarehouseLocationID in
+                         from sl in locs
+                         select sl.WarehouseLocationID
+                     where WarehouseLocationID.HasValue
+                     select WarehouseLocationID.Value).Distinct().ToArray();
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0165 use of unassigned local (2 sites, AddReplacementRREs/combineRoute). VB permits reading a possibly-unassigned local via `If var IsNot Nothing`; C# needs definite assignment. Init to default")]

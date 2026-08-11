@@ -133,6 +133,10 @@ internal class QueryConverter
     {
         CSSyntax.ExpressionSyntax query = null;
         foreach (var (queryContinuation, queryEnd) in querySegments) {
+            // Capture the segment's last VB clause BEFORE ConvertQueryWith-
+            // ContinuationAsync drains the queue — used to detect a
+            // single-item Select renaming the range variable.
+            var lastVbClauseInSegment = queryContinuation.LastOrDefault().Item2;
             var subQuery = await ConvertQueryWithContinuationAsync(queryContinuation, reusableFromCsId);
             if (fromClauseSyntax == null) {
                 fromClauseSyntax = subQuery.Clauses.OfType<CSSyntax.FromClauseSyntax>().First();
@@ -145,6 +149,25 @@ internal class QueryConverter
 
             if (queryEnd is not null) {
                 query = await ConvertQueryToLinqAsync(reusableFromCsId, queryEnd, query);
+            }
+            // If this segment ended with a single-item VB Select that renamed
+            // the range variable (`Select sl.WarehouseLocationID` gives implicit
+            // name `WarehouseLocationID`; `Select x = ...` gives `x`), the next
+            // segment's downstream clauses reference the new name. Rebind the
+            // outer `from` variable so `Where WarehouseLocationID.HasValue`
+            // resolves — otherwise emission is `from sl in ... where
+            // WarehouseLocationID.HasValue` and CS0103 "name does not exist".
+            //
+            // We look at the SEGMENT's own last VB clause (via querySectionsReversed's
+            // last enqueued clauseEnd), which is where a Select would live for
+            // this pattern (Select-forced-continuation sets `queryEnd` to null).
+            if (lastVbClauseInSegment is VBSyntax.SelectClauseSyntax singleSelect
+                && singleSelect.Variables.Count == 1) {
+                var renamed = singleSelect.Variables[0].NameEquals?.Identifier.Identifier
+                              ?? singleSelect.Variables[0].Expression.ExtractAnonymousTypeMemberName();
+                if (renamed is { } renamedToken) {
+                    reusableFromCsId = CommonConversions.ConvertIdentifier(renamedToken).WithoutSourceMapping();
+                }
             }
             fromClauseSyntax = SyntaxFactory.FromClause(reusableFromCsId, query);
         }
