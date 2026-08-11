@@ -188,8 +188,43 @@ internal class QueryConverter
                 var groupKeyIds = GetGroupKeyIdentifiers(gcs).ToList();
 
                 var continuationClauses = SyntaxFactory.List<CSSyntax.QueryClauseSyntax>();
-                if (groupKeyIds.Count == 1) {
-                    var letGroupKey = SyntaxFactory.LetClause(groupKeyIds.First(), SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, ValidSyntaxFactory.IdentifierName(GetGroupIdentifier(gcs)), ValidSyntaxFactory.IdentifierName("Key")));
+                // Bind the group key and each aggregation variable to a `let` clause
+                // so the nested Select's bare references (`Select BandID, foo = ...`)
+                // resolve — VB's `Group By .. Into ..` promotes both to the projection
+                // namespace, C# needs explicit lets.
+                var groupIdentifierForLet = GetGroupIdentifier(gcs);
+                if (nestedClause != null) {
+                    if (groupKeyIds.Count == 1) {
+                        var letGroupKey = SyntaxFactory.LetClause(groupKeyIds.First(),
+                            SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                ValidSyntaxFactory.IdentifierName(groupIdentifierForLet),
+                                ValidSyntaxFactory.IdentifierName("Key")));
+                        continuationClauses = continuationClauses.Add(letGroupKey);
+                    }
+                    // Also add lets for EXPLICITLY-named aggregation variables so
+                    // `Select <aggName>` in the nested clause works. Bare `Into Group`
+                    // doesn't need a let — the group identifier already binds it.
+                    foreach (var agg in gcs.AggregationVariables) {
+                        if (agg.NameEquals?.Identifier.Identifier is not { } aggName) continue;
+                        // Skip if the aggregation is bare Group and its explicit name
+                        // matches the group identifier — that becomes `let g = g` which
+                        // C# rejects (self-referential range variable).
+                        if (agg.Aggregation is VBSyntax.GroupAggregationSyntax
+                            && string.Equals(aggName.ValueText, groupIdentifierForLet.ValueText, StringComparison.OrdinalIgnoreCase)) {
+                            continue;
+                        }
+                        CSSyntax.ExpressionSyntax aggExpr = agg.Aggregation switch {
+                            VBSyntax.GroupAggregationSyntax => ValidSyntaxFactory.IdentifierName(groupIdentifierForLet),
+                            VBSyntax.FunctionAggregationSyntax fa => SyntaxFactory.InvocationExpression(
+                                SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                    ValidSyntaxFactory.IdentifierName(groupIdentifierForLet),
+                                    ValidSyntaxFactory.IdentifierName(fa.FunctionName.Text))),
+                            _ => ValidSyntaxFactory.IdentifierName(groupIdentifierForLet)
+                        };
+                        continuationClauses = continuationClauses.Add(SyntaxFactory.LetClause(aggName.Text, aggExpr));
+                    }
+                } else if (groupKeyIds.Count == 1) {
+                    var letGroupKey = SyntaxFactory.LetClause(groupKeyIds.First(), SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, ValidSyntaxFactory.IdentifierName(groupIdentifierForLet), ValidSyntaxFactory.IdentifierName("Key")));
                     continuationClauses = continuationClauses.Add(letGroupKey);
                 }
                 if (!gcs.Items.Any()) {
