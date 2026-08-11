@@ -1341,6 +1341,27 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 _typeContext.PerScopeState.PushScope();
                 try {
                     var csNode = await node.Body.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
+                    // When the Function lambda's inferred VB body type is
+                    // Nullable<Boolean> but the target delegate returns `bool`
+                    // (Where/Any/All predicates), unwrap with `?? false` so the
+                    // predicate matches Func<T, bool>. Without this, callers
+                    // hit CS0266/CS1662 on a per-element nullable comparison
+                    // like `Function(po) po.OrderDate > cutoff` where OrderDate
+                    // is Date? and codeconv emitted a `bool?` ternary body.
+                    if (node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader) {
+                        var bodyType = _semanticModel.GetTypeInfo(node.Body).Type;
+                        var lambdaConverted = _semanticModel.GetTypeInfo(node).ConvertedType as INamedTypeSymbol;
+                        var delegateReturn = lambdaConverted?.DelegateInvokeMethod?.ReturnType;
+                        bool bodyIsNullableBool = bodyType != null && bodyType.IsNullable(out var underlying)
+                                                  && underlying?.SpecialType == SpecialType.System_Boolean;
+                        bool wantsBool = delegateReturn?.SpecialType == SpecialType.System_Boolean;
+                        if (bodyIsNullableBool && wantsBool) {
+                            csNode = SyntaxFactory.BinaryExpression(
+                                SyntaxKind.CoalesceExpression,
+                                csNode.AddParens(),
+                                LiteralConversions.GetLiteralExpression(false));
+                        }
+                    }
                     var expressionBodyStatement = SyntaxFactory.ExpressionStatement(csNode);
                     var isFunction = node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader;
                     // If the body's a Function lambda, the single statement is
