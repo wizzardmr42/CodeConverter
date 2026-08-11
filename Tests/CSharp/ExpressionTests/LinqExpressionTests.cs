@@ -1134,4 +1134,162 @@ public static partial class M
     }
 }");
     }
+
+    [Fact]
+    public async Task SelectWithRetainedRangeVarStaysAccessibleAsync()
+    {
+        // VB `Select x, Extra = ...` where the first item is a bare reference
+        // to the current range variable creates an anonymous type `{x, Extra}`
+        // BUT VB's transparent-identifier magic keeps `x.Member` accessible in
+        // subsequent clauses (Where/Group By/Order By/Select).
+        //
+        // C# `select new { x, Extra = ... }` loses that transparency: the range
+        // variable becomes the anon type, so `x.Member` fails with CS1061
+        // "does not contain a definition for 'Member'". Codeconv currently
+        // emits the anon-type projection form.
+        //
+        // Correct C# emission: keep the range variable and introduce `let`
+        // clauses for the extra members:
+        //   from x in src
+        //   let Extra = f(x)
+        //   where g(x.Member, Extra)
+        //   select ...
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Row
+    Public Property ID As Integer
+    Public Property Category As String
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim src As New List(Of Row)
+        Dim r = From x In src
+                Select x, Prefix = x.Category.Substring(0, 1)
+                Where x.ID > 0
+                Order By Prefix, x.ID
+                Select x.ID, Prefix
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Row
+{
+    public int ID { get; set; }
+    public string Category { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var src = new List<Row>();
+        var r = from x in src
+                let Prefix = x.Category.Substring(0, 1)
+                where x.ID > 0
+                orderby Prefix, x.ID
+                select new { x.ID, Prefix };
+    }
+}");
+    }
+
+    [Fact(Skip = "TDD: Select-rename with Distinct (CS0103 cluster ~17 sites — u/o/k/z single-letter loop vars)")]
+    public async Task SelectRenameWithDistinctPreservesRenamedVarAsync()
+    {
+        // VB `Select u = r.AuthorisedBy Distinct` renames the range variable
+        // to `u`, applies Distinct, and subsequent clauses (`Where u.X`,
+        // `Order By u.Y`) use `u`. Codeconv emits:
+        //   from r in src let u = r.AuthorisedBy select r).Distinct()
+        // — dropping `u` at the select (it kept `r`) and losing it in the
+        // outer scope. Result: `u.PasswordHash` etc. fail with CS0103.
+        //
+        // Correct emission: project TO u then Distinct, preserving u:
+        //   from u in (from r in src select r.AuthorisedBy).Distinct()
+        //   where u.PasswordHash != "" ...
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class User
+    Public Property PasswordHash As String
+    Public Property Surname As String
+End Class
+
+Public Class Row
+    Public Property HasUserId As Boolean
+    Public Property User As User
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim src As New List(Of Row)
+        Dim r = (From row In src Where row.HasUserId
+                 Select u = row.User Distinct
+                 Where u.PasswordHash <> """"
+                 Order By u.Surname
+                 Select u.Surname).ToList()
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class User
+{
+    public string PasswordHash { get; set; }
+    public string Surname { get; set; }
+}
+
+public partial class Row
+{
+    public bool HasUserId { get; set; }
+    public User User { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var src = new List<Row>();
+        var r = (from u in (from row in src
+                            where row.HasUserId
+                            select row.User).Distinct()
+                 where u.PasswordHash != """"
+                 orderby u.Surname
+                 select u.Surname).ToList();
+    }
+}");
+    }
+
+    [Fact(Skip = "TDD: DataRowCollection needs .Cast<DataRow>() (CS1934, ~8 sites) — semantic-model precondition needs revisiting; test scaffold doesn't fully bind")]
+    public async Task DataRowCollectionQuerySourceGetsCastAsync()
+    {
+        // VB `From dr In dataTable.Rows` — VB implicitly enumerates the
+        // untyped DataRowCollection as DataRow. C# LINQ requires a typed
+        // source, so `from dr in dt.Rows` fails: `DataRowCollection` has no
+        // `Select` and codeconv can't infer `dr`'s type — CS1934 "could not
+        // find an implementation of the query pattern for source type
+        // 'DataRowCollection'".
+        //
+        // Correct emission: insert `.Cast<DataRow>()` on the source.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Data
+Imports System.Linq
+
+Public Module M
+    Public Sub Do1(dt As DataTable)
+        Dim r = (From dr In dt.Rows Select dr(""Name"")).ToList()
+    End Sub
+End Module",
+            @"using System.Data;
+using System.Linq;
+
+public static partial class M
+{
+    public static void Do1(DataTable dt)
+    {
+        var r = (from dr in dt.Rows.Cast<DataRow>()
+                 select dr[""Name""]).ToList();
+    }
+}");
+    }
 }

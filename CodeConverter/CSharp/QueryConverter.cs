@@ -339,7 +339,32 @@ internal class QueryConverter
     /// In VB, multiple selects work like Let clauses, but the last one needs to become the actual select (its name is discarded)
     /// </summary>
     private static bool RequiredContinuation(VBSyntax.QueryClauseSyntax queryClauseSyntax, int clausesAfter) => queryClauseSyntax is VBSyntax.GroupByClauseSyntax
-                                                                                                                || queryClauseSyntax is VBSyntax.SelectClauseSyntax sc && (sc.Variables.Any(v => v.NameEquals is null) || clausesAfter == 0);
+                                                                                                                || queryClauseSyntax is VBSyntax.SelectClauseSyntax sc && !CanEmitSelectAsLets(sc) && (sc.Variables.Any(v => v.NameEquals is null) || clausesAfter == 0);
+
+    /// <summary>
+    /// VB `Select x, Extra1 = ..., Extra2 = ...` where the first variable is
+    /// a bare range-variable reference: VB's transparent identifier machinery
+    /// keeps `x.Member` accessible in downstream clauses. C# `select new {x,
+    /// Extra1, Extra2}` (the default multi-var emission) loses that — the
+    /// range variable becomes the anon type and `x.Member` fails with CS1061.
+    ///
+    /// When the first item is a bare IdentifierName we can preserve the range
+    /// variable and emit `let` clauses for each extra instead, keeping the
+    /// current segment (no continuation) and letting subsequent clauses see
+    /// both `x` and the new lets.
+    /// </summary>
+    private static bool CanEmitSelectAsLets(VBSyntax.SelectClauseSyntax sc)
+    {
+        if (sc.Variables.Count < 2) return false;
+        var first = sc.Variables.First();
+        if (first.NameEquals != null) return false;
+        if (first.Expression is not VBSyntax.IdentifierNameSyntax) return false;
+        // Every non-first variable needs a name we can lift into a `let`.
+        foreach (var v in sc.Variables.Skip(1)) {
+            if (v.NameEquals == null && v.Expression.ExtractAnonymousTypeMemberName() == null) return false;
+        }
+        return true;
+    }
 
     private async Task<IEnumerable<CSSyntax.FromClauseSyntax>> ConvertFromClauseSyntaxAsync(VBSyntax.FromClauseSyntax vbFromClause) => await vbFromClause.Variables.SelectAsync(ConvertFromClauseVariableAsync);
 
@@ -392,12 +417,27 @@ internal class QueryConverter
         return node switch {
             VBSyntax.FromClauseSyntax x => await ConvertFromClauseSyntaxAsync(x),
             VBSyntax.JoinClauseSyntax x => await ConvertJoinClauseAsync(x).YieldAsync(),
+            VBSyntax.SelectClauseSyntax x when CanEmitSelectAsLets(x) => await ConvertSelectWithRetainedRangeVarAsLetsAsync(x),
             VBSyntax.SelectClauseSyntax x => await ConvertSelectClauseAsync(x).YieldAsync(),
             VBSyntax.LetClauseSyntax x => await ConvertLetClauseAsync(x).YieldAsync(),
             VBSyntax.OrderByClauseSyntax x => await ConvertOrderByClauseAsync(x).YieldAsync(),
             VBSyntax.WhereClauseSyntax x => await ConvertWhereClauseAsync(x).YieldAsync(),
             _ => throw new NotImplementedException($"Conversion for query clause with kind '{node.Kind()}' not implemented")
         };
+    }
+
+    private async Task<IEnumerable<CSSyntax.QueryClauseSyntax>> ConvertSelectWithRetainedRangeVarAsLetsAsync(VBSyntax.SelectClauseSyntax sc)
+    {
+        // Skip the first (bare range-var) variable — it stays the range var.
+        // Emit one `let <name> = <expr>` per subsequent variable.
+        var clauses = new List<CSSyntax.QueryClauseSyntax>();
+        foreach (var v in sc.Variables.Skip(1)) {
+            var nameToken = v.NameEquals?.Identifier.Identifier
+                            ?? v.Expression.ExtractAnonymousTypeMemberName().Value;
+            var expression = await v.Expression.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+            clauses.Add(SyntaxFactory.LetClause(CommonConversions.ConvertIdentifier(nameToken), expression));
+        }
+        return clauses;
     }
 
     // We need a projection continuation when downstream code will use bare key
