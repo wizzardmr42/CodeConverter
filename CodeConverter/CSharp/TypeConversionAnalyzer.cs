@@ -129,6 +129,14 @@ internal class TypeConversionAnalyzer
 
     private ExpressionSyntax CreateCast(ExpressionSyntax csNode, ITypeSymbol vbConvertedType)
     {
+        // Anonymous types have no nameable form in C# — a `(var)expr` cast is a
+        // parse error, so drop the cast rather than emit one. The re-assignment
+        // (`q2 = <query>` where `q2` was declared as an anonymous IEnumerable)
+        // was the only reason we tried to add a cast; that reassignment is
+        // already type-safe by inference in the emitted C#.
+        if (vbConvertedType?.IsAnonymousType == true) {
+            return csNode;
+        }
         var typeName = GetTypeSyntax(vbConvertedType);
         if (csNode.SkipIntoParens().IsKind(SyntaxKind.DefaultLiteralExpression)) {
             return SyntaxFactory.DefaultExpression(typeName);
