@@ -1674,10 +1674,40 @@ CS1023: Embedded statement cannot be a declaration or labeled statement");
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS1656 cannot assign to foreach iteration variable (3 sites). VB permits reassigning For Each var, C# does not — need to rewrite as regular for-loop or use a mutable local")]
+    [Fact]
     public async Task ForEachIterationVariableReassignmentAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `For Each ltr In items ... ltr = ltr.Trim() ...` — VB permits
+        // reassigning a For Each control variable; C# `foreach` doesn't
+        // (CS1656). LocalVariableAnalyzer must exclude the variable from
+        // its "inline" set when the loop body assigns to it, so the visitor
+        // falls into the `currentX` alias branch and emits a mutable local
+        // shadow.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Module M
+    Public Sub Do1(items As String())
+        For Each ltr In items
+            ltr = ltr.Trim()
+            If ltr.Length > 0 Then Continue For
+        Next
+    End Sub
+End Module",
+            @"
+public static partial class M
+{
+    public static void Do1(string[] items)
+    {
+        foreach (var currentLtr in items)
+        {
+            var ltr = currentLtr;
+            ltr = ltr.Trim();
+            if (ltr.Length > 0)
+                continue;
+        }
+    }
+}", incompatibleWithAutomatedCommentTesting: true);
     }
 
     [Fact(Skip = "TDD: CS1618 delegate from method with Conditional attribute (3 sites — Debug.WriteLine). Need to wrap in a lambda instead of method-group conversion")]

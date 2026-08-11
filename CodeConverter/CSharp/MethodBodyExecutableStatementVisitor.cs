@@ -709,7 +709,16 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
                 id = vId.Identifier;
             } else {
                 id = CommonConversions.CsEscapedIdentifier(GetUniqueVariableNameInScope(node, "current" + varSymbol.Name.ToPascalCase()));
-                statements.Add(SyntaxFactory.ExpressionStatement(SyntaxFactory.AssignmentExpression(SyntaxKind.SimpleAssignmentExpression, v, ValidSyntaxFactory.IdentifierName(id))));
+                // Emit a declaration `var ltr = currentLtr;` rather than a
+                // bare assignment — the VB For Each implicitly declared the
+                // control variable, so there's no outer C# declaration to
+                // assign into. Bare assignment gives CS0103. Using `var` also
+                // matches the exact element type without recomputation.
+                if (v is IdentifierNameSyntax outerId) {
+                    statements.Add(CommonConversions.CreateLocalVariableDeclarationAndAssignment(outerId.Identifier.Text, ValidSyntaxFactory.IdentifierName(id)));
+                } else {
+                    statements.Add(SyntaxFactory.ExpressionStatement(SyntaxFactory.AssignmentExpression(SyntaxKind.SimpleAssignmentExpression, v, ValidSyntaxFactory.IdentifierName(id))));
+                }
             }
         } else {
             var v = await stmt.ControlVariable.AcceptAsync<IdentifierNameSyntax>(_expressionVisitor);

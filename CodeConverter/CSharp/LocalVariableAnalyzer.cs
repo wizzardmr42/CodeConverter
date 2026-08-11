@@ -18,7 +18,18 @@ internal static class LocalVariableAnalyzer
     {
         if (semanticModel.GetSymbolInfo(block.ForEachStatement.ControlVariable).Symbol is ILocalSymbol varSymbol) {
             var usagesOutsideLoop = await solution.GetUsagesAsync(varSymbol, block.GetLocation());
-            if (!usagesOutsideLoop.Any()) return varSymbol;
+            if (usagesOutsideLoop.Any()) return null;
+            // VB allows reassigning a For Each control variable; C# doesn't
+            // (CS1656). If the loop body assigns to the variable, DON'T inline
+            // — force VisitForEachBlock to introduce a `currentX` alias with a
+            // `var ltr = currentX;` shadow that is mutable.
+            foreach (var assign in block.Statements.SelectMany(s => s.DescendantNodesAndSelf()).OfType<AssignmentStatementSyntax>()) {
+                if (semanticModel.GetSymbolInfo(assign.Left).Symbol is ILocalSymbol assignedSymbol &&
+                    SymbolEqualityComparer.IncludeNullability.Equals(assignedSymbol, varSymbol)) {
+                    return null;
+                }
+            }
+            return varSymbol;
         }
         return null;
     }
