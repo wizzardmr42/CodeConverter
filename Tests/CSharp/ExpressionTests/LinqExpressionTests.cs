@@ -1811,10 +1811,35 @@ public static partial class M
 }", incompatibleWithAutomatedCommentTesting: true);
     }
 
-    [Fact(Skip = "TDD: CS1618 delegate from method with Conditional attribute (3 sites — Debug.WriteLine). Need to wrap in a lambda instead of method-group conversion")]
+    [Fact]
     public async Task ConditionalMethodDelegateWrapAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `AddressOf Debug.WriteLine` permitted a method-group conversion
+        // to a delegate for a method marked [Conditional("DEBUG")]. C#
+        // forbids that (CS1618) because the delegate could be invoked in a
+        // Release build where the method would silently no-op.
+        //
+        // Fix: emit a lambda wrapper `(arg1) => Debug.WriteLine(arg1)`. The
+        // method call inside the lambda body is honoured like any other call
+        // (elided in Release when the condition symbol isn't defined) —
+        // matches VB's runtime behaviour.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Diagnostics
+
+Public Module M
+    Public Sub Do1(setter As Action(Of String))
+        setter = AddressOf Debug.WriteLine
+    End Sub
+End Module",
+            @"using System;
+using System.Diagnostics;
+
+public static partial class M
+{
+    public static void Do1(Action<string> setter)
+    {
+        setter = (arg1) => Debug.WriteLine(arg1);
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0236 field initializer references non-static member (2 sites, LBoardConfig). Move the initialization to constructor")]

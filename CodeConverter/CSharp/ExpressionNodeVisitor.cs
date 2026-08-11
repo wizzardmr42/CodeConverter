@@ -877,9 +877,29 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     private CSharpSyntaxNode ConvertAddressOf(VBSyntax.UnaryExpressionSyntax node, ExpressionSyntax expr)
     {
         var typeInfo = _semanticModel.GetTypeInfo(node);
-        if (_semanticModel.GetSymbolInfo(node.Operand).Symbol is IMethodSymbol ms && typeInfo.Type is INamedTypeSymbol nt && !ms.CompatibleSignatureToDelegate(nt)) {
-            int count = nt.DelegateInvokeMethod.Parameters.Length;
-            return CommonConversions.ThrowawayParameters(expr, count);
+        if (_semanticModel.GetSymbolInfo(node.Operand).Symbol is IMethodSymbol ms && typeInfo.Type is INamedTypeSymbol nt) {
+            if (!ms.CompatibleSignatureToDelegate(nt)) {
+                int count = nt.DelegateInvokeMethod.Parameters.Length;
+                return CommonConversions.ThrowawayParameters(expr, count);
+            }
+            // C# forbids a method-group conversion for a method marked
+            // [Conditional] (or overriding one): CS1618. VB's `AddressOf`
+            // permitted it. Wrap in a lambda that forwards the params so the
+            // delegate is a real function that invokes the possibly-conditioned
+            // method — the method call inside the lambda body is honoured by
+            // the compiler like any other call (elided in Release when the
+            // condition symbol isn't defined).
+            if (ms.GetAttributes().Any(a => a.AttributeClass?.Name == "ConditionalAttribute")
+                || ms.OverriddenMethod is { } overridden && overridden.GetAttributes().Any(a => a.AttributeClass?.Name == "ConditionalAttribute")) {
+                int paramCount = nt.DelegateInvokeMethod.Parameters.Length;
+                var paramNames = Enumerable.Range(0, paramCount).Select(i => "arg" + (i + 1)).ToArray();
+                var parameters = SyntaxFactory.ParameterList(SyntaxFactory.SeparatedList(
+                    paramNames.Select(n => SyntaxFactory.Parameter(SyntaxFactory.Identifier(n)))));
+                var args = SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(
+                    paramNames.Select(n => SyntaxFactory.Argument(ValidSyntaxFactory.IdentifierName(n)))));
+                return SyntaxFactory.ParenthesizedLambdaExpression(parameters,
+                    SyntaxFactory.InvocationExpression(expr, args));
+            }
         }
         return expr;
     }
