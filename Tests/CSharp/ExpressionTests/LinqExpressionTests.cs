@@ -1261,6 +1261,216 @@ public static partial class M
 }");
     }
 
+    [Fact]
+    public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
+    {
+        // Same transparency preservation as SelectWithRetainedRangeVar...
+        // but the bare range-var reference is the SECOND item (VB order
+        // doesn't dictate which item is the range var). The chained-Select
+        // pattern in BMCore's GetUnitDataFromPO looks like this.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Inner
+    Public Property Cat As String
+End Class
+
+Public Class Row
+    Public Property Inner As Inner
+    Public Property ID As Integer
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim src As New List(Of Row)
+        Dim r = From x In src
+                Select x.Inner, x
+                Where x.ID > 0
+                Order By Inner.Cat, x.ID
+                Select x.ID, Inner
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Inner
+{
+    public string Cat { get; set; }
+}
+
+public partial class Row
+{
+    public Inner Inner { get; set; }
+    public int ID { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var src = new List<Row>();
+        var r = from x in src
+                let Inner = x.Inner
+                where x.ID > 0
+                orderby Inner.Cat, x.ID
+                select new { x.ID, Inner };
+    }
+}");
+    }
+
+    [Fact(Skip = "TDD: VB If(nullableEnum, 0) — codeconv emits `enum? ?? int` which fails CS0019. Need conversion of RHS to enum type or cast LHS to int?")]
+    public async Task IfBinaryOnNullableEnumWithIntDefaultAsync()
+    {
+        // VB `If(item.Recorded, 999)` where Recorded is `MyEnum?` — VB
+        // allows implicit conversion of 999 to the enum type. Codeconv
+        // emits `item.Recorded ?? 999` — CS0019 because `??` needs
+        // matching types and enum? / int aren't compatible.
+        //
+        // Correct: cast the default to the enum, or the LHS to underlying int:
+        //   item.Recorded ?? (MyEnum)999
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Enum MyEnum
+    A
+    B
+End Enum
+
+Public Class Item
+    Public Property Recorded As MyEnum?
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim items As New List(Of Item)
+        Dim r = items.OrderBy(Function(x) If(x.Recorded, 999)).ToList()
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public enum MyEnum
+{
+    A,
+    B
+}
+
+public partial class Item
+{
+    public MyEnum? Recorded { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var items = new List<Item>();
+        var r = items.OrderBy(x => x.Recorded ?? (MyEnum)999).ToList();
+    }
+}");
+    }
+
+    [Fact(Skip = "TDD: VB If(nullableShort, \"\") — codeconv emits `short? ?? string` (CS0019). Need ToString wrap on LHS")]
+    public async Task IfBinaryOnNullableShortWithStringDefaultAsync()
+    {
+        // VB `If(l.CourierID, "")` where CourierID is `short?` and default
+        // is string — VB implicitly ToString()s the LHS. Codeconv emits
+        // `(l.CourierID) ?? ("")` — CS0019 because short? and string aren't
+        // compatible.
+        //
+        // Correct: `l.CourierID?.ToString() ?? ""` — treats null as "".
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class Line
+    Public Property CourierID As Short?
+End Class
+
+Public Module M
+    Public Function Label(l As Line) As String
+        Return If(l.CourierID, """")
+    End Function
+End Module",
+            @"public partial class Line
+{
+    public short? CourierID { get; set; }
+}
+
+public static partial class M
+{
+    public static string Label(Line l)
+    {
+        return l.CourierID?.ToString() ?? """";
+    }
+}");
+    }
+
+    [Fact(Skip = "TDD: VB decimal + double numeric promotion — codeconv drops the conversion, C# rejects mixed arithmetic (CS0019)")]
+    public async Task DecimalPlusDoublePromotesToDecimalAsync()
+    {
+        // VB permits `decimalVal + doubleVal` — implicitly promotes one to
+        // the other. Codeconv emits `decimalVal + doubleVal` directly and
+        // C# rejects `decimal + double` with CS0019.
+        //
+        // Correct: cast the double to decimal (or vice versa depending on
+        // the target/context). Common pattern in report calculations.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Module M
+    Public Function Add(a As Decimal, b As Double) As Decimal
+        Return a + b
+    End Function
+End Module",
+            @"public static partial class M
+{
+    public static decimal Add(decimal a, double b)
+    {
+        return a + (decimal)b;
+    }
+}");
+    }
+
+    [Fact(Skip = "TDD: VB `+=` on custom type where only widening `+` operator is defined (CS0019)")]
+    public async Task CompoundAssignOnCustomTypeAsync()
+    {
+        // VB permits `ret += x` when `ret` and `x` are the same custom
+        // type and a widening `+` operator returning a compatible type is
+        // defined. Codeconv emits `ret += x` which C# rejects with CS0019
+        // because C# doesn't auto-synthesise `+=` from `+`.
+        //
+        // Correct: unfold to `ret = ret + x`.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class Sql
+    Public Shared Widening Operator CType(s As String) As Sql
+        Return New Sql()
+    End Operator
+    Public Shared Operator +(a As Sql, b As Sql) As Sql
+        Return New Sql()
+    End Operator
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim ret As Sql = """"
+        ret += CType("" more"", Sql)
+    End Sub
+End Module",
+            @"public partial class Sql
+{
+    public static implicit operator Sql(string s)
+    {
+        return new Sql();
+    }
+    public static Sql operator +(Sql a, Sql b)
+    {
+        return new Sql();
+    }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        Sql ret = """";
+        ret = ret + (Sql)"" more"";
+    }
+}");
+    }
+
     [Fact(Skip = "TDD: DataRowCollection needs .Cast<DataRow>() (CS1934, ~8 sites) — semantic-model precondition needs revisiting; test scaffold doesn't fully bind")]
     public async Task DataRowCollectionQuerySourceGetsCastAsync()
     {

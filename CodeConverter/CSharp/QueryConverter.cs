@@ -339,31 +339,43 @@ internal class QueryConverter
     /// In VB, multiple selects work like Let clauses, but the last one needs to become the actual select (its name is discarded)
     /// </summary>
     private static bool RequiredContinuation(VBSyntax.QueryClauseSyntax queryClauseSyntax, int clausesAfter) => queryClauseSyntax is VBSyntax.GroupByClauseSyntax
-                                                                                                                || queryClauseSyntax is VBSyntax.SelectClauseSyntax sc && !CanEmitSelectAsLets(sc) && (sc.Variables.Any(v => v.NameEquals is null) || clausesAfter == 0);
+                                                                                                                || queryClauseSyntax is VBSyntax.SelectClauseSyntax sc && !CanEmitSelectAsLets(sc, clausesAfter) && (sc.Variables.Any(v => v.NameEquals is null) || clausesAfter == 0);
 
     /// <summary>
-    /// VB `Select x, Extra1 = ..., Extra2 = ...` where the first variable is
-    /// a bare range-variable reference: VB's transparent identifier machinery
-    /// keeps `x.Member` accessible in downstream clauses. C# `select new {x,
-    /// Extra1, Extra2}` (the default multi-var emission) loses that — the
-    /// range variable becomes the anon type and `x.Member` fails with CS1061.
+    /// VB `Select x, Extra1 = ..., Extra2 = ...` where one variable is a bare
+    /// range-variable reference: VB's transparent identifier machinery keeps
+    /// `x.Member` accessible in downstream clauses. C# `select new {x, Extra1,
+    /// Extra2}` (the default multi-var emission) loses that — the range
+    /// variable becomes the anon type and `x.Member` fails with CS1061.
     ///
-    /// When the first item is a bare IdentifierName we can preserve the range
-    /// variable and emit `let` clauses for each extra instead, keeping the
+    /// When exactly one item is a bare IdentifierName we can preserve the range
+    /// variable and emit `let` clauses for each other var instead, keeping the
     /// current segment (no continuation) and letting subsequent clauses see
-    /// both `x` and the new lets.
+    /// both `x` and the new lets. The bare identifier can appear in any
+    /// position (VB `Select foo, bar` doesn't imply order — both are members
+    /// of the anon type).
     /// </summary>
-    private static bool CanEmitSelectAsLets(VBSyntax.SelectClauseSyntax sc)
+    private static bool CanEmitSelectAsLets(VBSyntax.SelectClauseSyntax sc, int clausesAfter)
     {
+        // Only intercept mid-query Selects (there are downstream clauses).
+        // The FINAL Select becomes the query's output — anon-type projection
+        // is the right emission there, and we can't reliably tell a bare
+        // identifier apart from a let-bound name at that point.
+        if (clausesAfter == 0) return false;
         if (sc.Variables.Count < 2) return false;
-        var first = sc.Variables.First();
-        if (first.NameEquals != null) return false;
-        if (first.Expression is not VBSyntax.IdentifierNameSyntax) return false;
-        // Every non-first variable needs a name we can lift into a `let`.
-        foreach (var v in sc.Variables.Skip(1)) {
+        int bareCount = 0;
+        foreach (var v in sc.Variables) {
+            bool isBareIdentifier = v.NameEquals == null && v.Expression is VBSyntax.IdentifierNameSyntax;
+            if (isBareIdentifier) {
+                bareCount++;
+                continue;
+            }
+            // Non-bare vars need a name we can lift into a `let`.
             if (v.NameEquals == null && v.Expression.ExtractAnonymousTypeMemberName() == null) return false;
         }
-        return true;
+        // Exactly one bare identifier (the presumed range variable) —
+        // otherwise we can't tell which is the range var to preserve.
+        return bareCount == 1;
     }
 
     private async Task<IEnumerable<CSSyntax.FromClauseSyntax>> ConvertFromClauseSyntaxAsync(VBSyntax.FromClauseSyntax vbFromClause) => await vbFromClause.Variables.SelectAsync(ConvertFromClauseVariableAsync);
@@ -417,7 +429,10 @@ internal class QueryConverter
         return node switch {
             VBSyntax.FromClauseSyntax x => await ConvertFromClauseSyntaxAsync(x),
             VBSyntax.JoinClauseSyntax x => await ConvertJoinClauseAsync(x).YieldAsync(),
-            VBSyntax.SelectClauseSyntax x when CanEmitSelectAsLets(x) => await ConvertSelectWithRetainedRangeVarAsLetsAsync(x),
+            // When we get here via segmentation the Select was NOT a segment
+            // boundary, so it's guaranteed to have downstream clauses in the
+            // same segment — safe to pass a non-zero clausesAfter marker.
+            VBSyntax.SelectClauseSyntax x when CanEmitSelectAsLets(x, clausesAfter: 1) => await ConvertSelectWithRetainedRangeVarAsLetsAsync(x),
             VBSyntax.SelectClauseSyntax x => await ConvertSelectClauseAsync(x).YieldAsync(),
             VBSyntax.LetClauseSyntax x => await ConvertLetClauseAsync(x).YieldAsync(),
             VBSyntax.OrderByClauseSyntax x => await ConvertOrderByClauseAsync(x).YieldAsync(),
@@ -428,10 +443,13 @@ internal class QueryConverter
 
     private async Task<IEnumerable<CSSyntax.QueryClauseSyntax>> ConvertSelectWithRetainedRangeVarAsLetsAsync(VBSyntax.SelectClauseSyntax sc)
     {
-        // Skip the first (bare range-var) variable — it stays the range var.
-        // Emit one `let <name> = <expr>` per subsequent variable.
+        // Skip the bare-identifier variable (the presumed range var —
+        // guaranteed to be exactly one by CanEmitSelectAsLets). Emit one
+        // `let <name> = <expr>` per non-bare variable.
         var clauses = new List<CSSyntax.QueryClauseSyntax>();
-        foreach (var v in sc.Variables.Skip(1)) {
+        foreach (var v in sc.Variables) {
+            bool isBareIdentifier = v.NameEquals == null && v.Expression is VBSyntax.IdentifierNameSyntax;
+            if (isBareIdentifier) continue;
             var nameToken = v.NameEquals?.Identifier.Identifier
                             ?? v.Expression.ExtractAnonymousTypeMemberName().Value;
             var expression = await v.Expression.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
