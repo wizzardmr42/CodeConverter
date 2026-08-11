@@ -602,13 +602,34 @@ internal class QueryConverter
 
     private SyntaxToken GetGroupIdentifier(VBSyntax.GroupByClauseSyntax gs)
     {
-        if (!gs.Items.Any()) return CommonConversions.CsEscapedIdentifier("Group");
+        // Compute the set of names we'll subsequently let-bind (see the
+        // GroupByClauseSyntax branch in ConvertSubQueryAsync). Using any of
+        // these as the `into` identifier would produce
+        // `into Group let Group = Group.Key` (CS1930 "range variable already
+        // declared").
+        var letBoundNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var k in gs.Keys) {
+            if (k.NameEquals?.Identifier.Identifier is { } n) letBoundNames.Add(n.ValueText);
+            else if (k.Expression.ExtractAnonymousTypeMemberName() is { } n2) letBoundNames.Add(n2.ValueText);
+        }
+        foreach (var v in gs.AggregationVariables) {
+            if (v.NameEquals?.Identifier.Identifier is { } n) letBoundNames.Add(n.ValueText);
+            else if (v.Aggregation is VBSyntax.FunctionAggregationSyntax fn) letBoundNames.Add(fn.FunctionName.ValueText);
+        }
+        // No Items: preserves the old default of `Group`, but fall back to
+        // `@group` on collision (e.g. VB `Group By Group = wd.Date_ Into ...`
+        // — where `Group` IS a key name we'll let-bind to `.Key`).
+        if (!gs.Items.Any()) {
+            return letBoundNames.Contains("Group")
+                ? SyntaxFactory.Identifier("@group")
+                : CommonConversions.CsEscapedIdentifier("Group");
+        }
         var name = gs.AggregationVariables.Select(v => v.Aggregation switch {
             VBSyntax.FunctionAggregationSyntax f => f.FunctionName,
             VBSyntax.GroupAggregationSyntax => v.NameEquals?.Identifier.Identifier,
             _ => default
         }).Concat(gs.Keys.Select(k => k.NameEquals?.Identifier.Identifier)).FirstOrDefault(x => x != null);
-        return name is {} n ? CommonConversions.ConvertIdentifier(n) : SyntaxFactory.Identifier("@group");
+        return name is {} finalName ? CommonConversions.ConvertIdentifier(finalName) : SyntaxFactory.Identifier("@group");
     }
 
     private static IEnumerable<string> GetGroupKeyIdentifiers(VBSyntax.GroupByClauseSyntax gs)

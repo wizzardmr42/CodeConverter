@@ -1656,10 +1656,55 @@ CS1023: Embedded statement cannot be a declaration or labeled statement");
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS1930 `range variable X already declared` (3 sites). Two `into Group` continuations in same query — need unique group identifier per Group By")]
+    [Fact]
     public async Task NestedGroupByUniqueGroupIdentifierAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `Group By Group = wd.Date Into AsEnumerable` — the key alias
+        // `Group` collides with codeconv's default group identifier `Group`
+        // (used for the C# `into Group` keyword). Emission was `into Group
+        // let Group = Group.Key` which fails CS1930 "range variable already
+        // declared".
+        //
+        // Fix in GetGroupIdentifier: skip any candidate identifier that
+        // matches a key name we'll subsequently let-bind, falling back to
+        // `@group`.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Wave
+    Public Property Date_ As System.DateTime
+End Class
+
+Public Module M
+    Public Sub Do1()
+        Dim waves As New List(Of Wave)
+        Dim r = (From wd In waves
+                 Group By Group = wd.Date_ Into AsEnumerable
+                 Order By Group).ToList()
+    End Sub
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Wave
+{
+    public DateTime Date_ { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        var waves = new List<Wave>();
+        var r = (from wd in waves
+                 group wd by wd.Date_ into @group
+                 let Group = @group.Key
+                 let AsEnumerable = @group.AsEnumerable()
+                 orderby Group
+                 select @group).ToList();
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS1937/1938 `name not in scope on X side of equals` (4 sites). Join order matters in C# but VB is permissive — swap sides")]
