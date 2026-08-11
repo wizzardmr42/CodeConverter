@@ -127,14 +127,28 @@ internal class TypeConversionAnalyzer
 
     private TypeSyntax GetTypeSyntax(ITypeSymbol type) => (TypeSyntax)_csSyntaxGenerator.TypeExpression(type);
 
+    private static bool ContainsAnonymousType(ITypeSymbol type)
+    {
+        if (type.IsAnonymousType) return true;
+        if (type is IArrayTypeSymbol at) return ContainsAnonymousType(at.ElementType);
+        if (type is INamedTypeSymbol nt && nt.IsGenericType) {
+            foreach (var arg in nt.TypeArguments) {
+                if (ContainsAnonymousType(arg)) return true;
+            }
+        }
+        return false;
+    }
+
     private ExpressionSyntax CreateCast(ExpressionSyntax csNode, ITypeSymbol vbConvertedType)
     {
         // Anonymous types have no nameable form in C# — a `(var)expr` cast is a
-        // parse error, so drop the cast rather than emit one. The re-assignment
-        // (`q2 = <query>` where `q2` was declared as an anonymous IEnumerable)
-        // was the only reason we tried to add a cast; that reassignment is
-        // already type-safe by inference in the emitted C#.
-        if (vbConvertedType?.IsAnonymousType == true) {
+        // parse error, so drop the cast rather than emit one. This also covers
+        // generic types parameterised by an anonymous type (e.g. reassigning
+        // `q2 = <query>` where q2 is `IEnumerable<{Date, Period, ...}>`); the
+        // type-syntax generator falls back to `var` for the anon type argument
+        // and the whole cast becomes invalid. The reassignment is type-safe by
+        // inference in the emitted C#, so drop the cast.
+        if (vbConvertedType != null && ContainsAnonymousType(vbConvertedType)) {
             return csNode;
         }
         var typeName = GetTypeSyntax(vbConvertedType);
