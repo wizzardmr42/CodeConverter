@@ -1329,8 +1329,37 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             }
             else
             {
-                var csNode = await node.Body.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
-                convertedStatements = new[] {SyntaxFactory.ExpressionStatement(csNode)};
+                // Push a scope so any hoists produced while converting the body
+                // expression (e.g. `argX = source` for ByRef arg conversion inside
+                // `.Select(Function(x) SomeCtor(x.A, x.B))`) stay INSIDE this
+                // lambda. Without this, the hoists were added to the outer
+                // method's scope and became bare references to `x` that no longer
+                // existed (`int argA = x.A;` outside the lambda — CS0103).
+                //
+                // If any pre-declarations / post-assignments were hoisted, the
+                // expression body is expanded into a block body with them.
+                _typeContext.PerScopeState.PushScope();
+                try {
+                    var csNode = await node.Body.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
+                    var expressionBodyStatement = SyntaxFactory.ExpressionStatement(csNode);
+                    var isFunction = node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader;
+                    // If the body's a Function lambda, the single statement is
+                    // the returned expression. For a Sub lambda it's a statement.
+                    var bodyStatement = isFunction
+                        ? (StatementSyntax)SyntaxFactory.ReturnStatement(csNode)
+                        : expressionBodyStatement;
+                    var withLocals = await _typeContext.PerScopeState.CreateLocalsAsync(
+                        node, new[] { bodyStatement }, _generatedNames, _semanticModel);
+                    if (withLocals.Count > 1) {
+                        // Hoists were added — must use a block body.
+                        convertedStatements = withLocals;
+                    } else {
+                        // No hoists — keep the expression body as-is.
+                        convertedStatements = new[] { expressionBodyStatement };
+                    }
+                } finally {
+                    _typeContext.PerScopeState.PopScope();
+                }
             }
 
             var param = await node.SubOrFunctionHeader.ParameterList.AcceptAsync<ParameterListSyntax>(TriviaConvertingExpressionVisitor);

@@ -913,4 +913,58 @@ public partial class BinaryExpressionRefParameter
 }");
     }
 
+    [Fact]
+    public async Task RefArgumentInLambdaBodyDoesNotLeakAsync()
+    {
+        // Bug: `.Select(Function(x) New Ctor(x.A, x.B))` where Ctor has
+        // ByRef params — codeconv used to hoist the `argA = x.A` decls into
+        // the OUTER method scope, leaking bare `x` references outside the
+        // lambda and producing CS0103. Fix: hoists must live inside the
+        // lambda body (block-body with declarations, or a local function).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Holder
+    Public ReadOnly Property A As Integer
+    Public ReadOnly Property B As Integer
+    Public Sub New(ByRef a As Integer, ByRef b As Integer)
+        Me.A = a
+        Me.B = b
+    End Sub
+End Class
+
+Public Class UsesHolder
+    Public Sub Foo()
+        Dim xs = New List(Of Holder)()
+        Dim ys = xs.Select(Function(x) New Holder(x.A, x.B)).ToList()
+    End Sub
+End Class",
+        @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Holder
+{
+    public int A { get; private set; }
+    public int B { get; private set; }
+    public Holder(ref int a, ref int b)
+    {
+        A = a;
+        B = b;
+    }
+}
+
+public partial class UsesHolder
+{
+    public void Foo()
+    {
+        var xs = new List<Holder>();
+        var ys = xs.Select(x =>
+        {
+            int arga = x.A;
+            int argb = x.B;
+            return new Holder(ref arga, ref argb);
+        }).ToList();
+    }
+}");
+    }
 }
