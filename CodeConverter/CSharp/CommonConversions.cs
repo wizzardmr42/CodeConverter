@@ -69,10 +69,10 @@ internal class CommonConversions
         // IQueryable of the element), but the trivial query simplifies to the
         // bare source in C#, and `var` would re-infer the narrower source
         // type (DbSet etc.), breaking later reassignments (CS0266). Spell
-        // the declared type out.
-        if (vbInitValue is VBSyntax.QueryExpressionSyntax { Clauses: { Count: 1 } trivialClauses } && trivialClauses[0] is VBSyntax.FromClauseSyntax) {
-            preferExplicitType = true;
-        }
+        // the declared type out — but only when it bound to a real type;
+        // a semantic gap leaves the local as Object, and `object q` is
+        // worse than var.
+        bool preferExplicitTypeForTrivialQueryInit = vbInitValue is VBSyntax.QueryExpressionSyntax { Clauses: { Count: 1 } trivialClauses } && trivialClauses[0] is VBSyntax.FromClauseSyntax;
         IMethodSymbol initSymbol = null;
         if (vbInitValue != null) {
             TypeInfo expType = vbInitializerTypeInfo.Value;
@@ -95,6 +95,10 @@ internal class CommonConversions
                 declaredSymbolType = widenedSymbolType;
                 // `var` would re-infer the narrow initializer type — the
                 // widened declaration must be spelled out.
+                preferExplicitType = true;
+            }
+            if (preferExplicitTypeForTrivialQueryInit
+                && declaredSymbolType is { TypeKind: not TypeKind.Error } && declaredSymbolType.SpecialType != SpecialType.System_Object) {
                 preferExplicitType = true;
             }
             var equalsValueClauseSyntax = await ConvertEqualsValueClauseSyntaxAsync(declarator, name, vbInitValue, declaredSymbolType, declaredSymbol, initializerOrMethodDecl);
