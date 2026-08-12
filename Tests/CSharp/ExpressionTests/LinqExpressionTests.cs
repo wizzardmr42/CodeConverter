@@ -3067,10 +3067,70 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0030 Func<T, bool?> → Func<T, bool> (3 sites, DispatchScheduleRule). Passing an outer-nullable-bool predicate to a bool-Func parameter — needs unwrap wrapper lambda")]
+    [Fact]
     public async Task NullableBoolFuncToBoolFuncAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // BMCore DispatchDateCalculator: `Function(ds As
+        // IDispatchScheduleRuleSource) <bool? expr>` stored in an array, then
+        // `.Where(matchFunc)` on a List(Of DispatchScheduleOverride). VB
+        // delegate relaxation converts Func(Of Interface, Boolean?) to
+        // Func(Of Impl, Boolean) by wrapping; codeconv emitted a direct
+        // delegate CAST, which C# always rejects (CS0030) — delegate types
+        // never cast across signatures. Emit a wrapper lambda invoking the
+        // source with the target's parameters and converting the return.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Interface IRule
+    ReadOnly Property LocationID As Integer?
+End Interface
+
+Public Class Impl
+    Implements IRule
+    Public ReadOnly Property LocationID As Integer? Implements IRule.LocationID
+End Class
+
+Public Module M
+    Public Function FirstMatch(rules As List(Of Impl), locationID As Integer?) As Impl
+        Dim matchingAttemptOrder = {
+            Function(ds As IRule) ds.LocationID.HasValue AndAlso ds.LocationID = locationID,
+            Function(ds As IRule) ds.LocationID Is Nothing
+        }
+        For Each matchFunc In matchingAttemptOrder
+            Dim found = rules.Where(matchFunc).FirstOrDefault()
+            If found IsNot Nothing Then Return found
+        Next
+        Return Nothing
+    End Function
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial interface IRule
+{
+    int? LocationID { get; }
+}
+
+public partial class Impl : IRule
+{
+    public int? LocationID { get; private set; }
+}
+
+public static partial class M
+{
+    public static Impl FirstMatch(List<Impl> rules, int? locationID)
+    {
+        var matchingAttemptOrder = new[] { new Func<IRule, bool?>((ds) => ds.LocationID.HasValue ? ds.LocationID is var arg1 && arg1.HasValue && locationID.HasValue ? arg1.Value == locationID.Value : null : false), new Func<IRule, bool?>((ds) => ds.LocationID is null) };
+        foreach (var matchFunc in matchingAttemptOrder)
+        {
+            var found = rules.Where(relaxArg1 => (bool)matchFunc(relaxArg1)).FirstOrDefault();
+            if (found is not null)
+                return found;
+        }
+        return null;
+    }
+}");
     }
 
     [Fact]

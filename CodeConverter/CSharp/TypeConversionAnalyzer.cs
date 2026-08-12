@@ -118,6 +118,15 @@ internal class TypeConversionAnalyzer
                 return addParenthesisIfNeeded ? vbNode.ParenthesizeIfPrecedenceCouldChange(csNode) : csNode;
             case TypeConversionKind.DestructiveCast:
             case TypeConversionKind.NonDestructiveCast:
+                // Delegate types never cast across signatures in C# (CS0030).
+                // VB delegate relaxation (e.g. Func(Of Interface, Boolean?)
+                // used where Func(Of Impl, Boolean) is required) needs a
+                // wrapper lambda instead: `x => (bool)source(x)`.
+                if (vbType is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } srcInvoke }
+                    && vbConvertedType is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } tgtInvoke }
+                    && !SymbolEqualityComparer.Default.Equals(vbType, vbConvertedType)) {
+                    return CreateDelegateRelaxationWrapper(csNode, srcInvoke, tgtInvoke);
+                }
                 return CreateCast(csNode, vbConvertedType);
             case TypeConversionKind.Conversion:
                 return AddExplicitConvertTo(vbNode, csNode, vbType, vbConvertedType);
@@ -136,6 +145,30 @@ internal class TypeConversionAnalyzer
     }
 
     private TypeSyntax GetTypeSyntax(ITypeSymbol type) => (TypeSyntax)_csSyntaxGenerator.TypeExpression(type);
+
+    /// <summary>
+    /// VB delegate relaxation: adapt a delegate value to an incompatible
+    /// delegate type by wrapping in a lambda that invokes the source with the
+    /// target's parameters, converting the return value (e.g. `bool?` source
+    /// return for a `bool` target uses a cast — VB's narrowing throws on null,
+    /// and so does `.Value` via the cast).
+    /// </summary>
+    private ExpressionSyntax CreateDelegateRelaxationWrapper(ExpressionSyntax csNode, IMethodSymbol srcInvoke, IMethodSymbol tgtInvoke)
+    {
+        var paramNames = tgtInvoke.Parameters.Select((p, i) => "relaxArg" + (i + 1)).ToList();
+        var invokeArgs = SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(
+            paramNames.Select(n => SyntaxFactory.Argument(ValidSyntaxFactory.IdentifierName(n)))));
+        ExpressionSyntax body = SyntaxFactory.InvocationExpression(csNode.AddParens(), invokeArgs);
+        if (!SymbolEqualityComparer.Default.Equals(srcInvoke.ReturnType, tgtInvoke.ReturnType) && !tgtInvoke.ReturnsVoid) {
+            body = ValidSyntaxFactory.CastExpression(GetTypeSyntax(tgtInvoke.ReturnType), body);
+        }
+        if (paramNames.Count == 1) {
+            return SyntaxFactory.SimpleLambdaExpression(SyntaxFactory.Parameter(SyntaxFactory.Identifier(paramNames[0])), body);
+        }
+        var paramList = SyntaxFactory.ParameterList(SyntaxFactory.SeparatedList(
+            paramNames.Select(n => SyntaxFactory.Parameter(SyntaxFactory.Identifier(n)))));
+        return SyntaxFactory.ParenthesizedLambdaExpression(paramList, body);
+    }
 
     private static bool ContainsAnonymousType(ITypeSymbol type)
     {
