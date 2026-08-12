@@ -65,6 +65,14 @@ internal class CommonConversions
         var vbInitializerType = vbInitValue != null ? vbInitializerTypeInfo.Value.Type : default(ITypeSymbol);
 
         bool requireExplicitTypeForAll = declarator.Names.Count > 1;
+        // `Dim q = From l In src` — VB types q as the QUERY (IEnumerable/
+        // IQueryable of the element), but the trivial query simplifies to the
+        // bare source in C#, and `var` would re-infer the narrower source
+        // type (DbSet etc.), breaking later reassignments (CS0266). Spell
+        // the declared type out.
+        if (vbInitValue is VBSyntax.QueryExpressionSyntax { Clauses: { Count: 1 } trivialClauses } && trivialClauses[0] is VBSyntax.FromClauseSyntax) {
+            preferExplicitType = true;
+        }
         IMethodSymbol initSymbol = null;
         if (vbInitValue != null) {
             TypeInfo expType = vbInitializerTypeInfo.Value;

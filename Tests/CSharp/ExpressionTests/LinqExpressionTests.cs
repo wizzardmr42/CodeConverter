@@ -2629,6 +2629,13 @@ Public Module M
         q = From r In q Where r.ID > 0 Select r
         Dim a = q.ToArray()
     End Sub
+
+    Public Sub Do2(ctx As Ctx)
+        Dim q = From l In ctx.Rows
+        q = From r In q Where r.ID > 0 Select r
+        q = q.Take(10)
+        Dim a = q.ToArray()
+    End Sub
 End Module",
             @"using System.Collections;
 using System.Collections.Generic;
@@ -2666,6 +2673,16 @@ public static partial class M
         q = from r in q
             where r.ID > 0
             select r;
+        Row[] a = q.ToArray();
+    }
+
+    public static void Do2(Ctx ctx)
+    {
+        IEnumerable<Row> q = ctx.Rows;
+        q = from r in q
+            where r.ID > 0
+            select r;
+        q = q.Take(10);
         Row[] a = q.ToArray();
     }
 }");
