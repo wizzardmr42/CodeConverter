@@ -1917,6 +1917,36 @@ public static partial class M
     }
 
     [Fact]
+    public async Task XmlAttributeAxisReturnsValueAsync()
+    {
+        // VB `x.@attr` returns the attribute VALUE (String) via
+        // InternalXmlHelper.AttributeValue — first element's attribute for a
+        // collection receiver, Nothing when missing. The old
+        // `.Attributes("attr")` emission returned IEnumerable<XAttribute>.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Xml.Linq
+
+Public Module M
+    Public Function Do1(el As XElement) As String
+        Dim direct = el.@id
+        Dim viaAxis = el.<Book>.@id
+        Return direct & viaAxis
+    End Function
+End Module",
+            @"using System.Linq;
+using System.Xml.Linq;
+
+public static partial class M
+{
+    public static string Do1(XElement el)
+    {
+        string direct = el.Attribute(""id"")?.Value;
+        string viaAxis = el.Elements(""Book"").FirstOrDefault()?.Attribute(""id"")?.Value;
+        return direct + viaAxis;
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

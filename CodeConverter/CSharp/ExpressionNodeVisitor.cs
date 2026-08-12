@@ -169,6 +169,34 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         _extraUsingDirectives.Add("System.Xml.Linq");
 
         var xElementMethodName = GetXElementMethodName(node);
+        var convertedName = await node.Name.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
+
+        // VB's attribute axis `x.@attr` returns the attribute VALUE (a
+        // String, via InternalXmlHelper.AttributeValue — first element's
+        // attribute for a collection receiver, or Nothing). The old
+        // `.Attributes("attr")` emission returned IEnumerable<XAttribute>,
+        // failing wherever a string was expected.
+        if (node.Token2 != default(SyntaxToken) && node.Token2.Text == "@" && node.Base != null) {
+            var attrReceiver = await node.Base.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
+            if (IsEnumerableOfXElement(_semanticModel.GetTypeInfo(node.Base).Type)) {
+                _extraUsingDirectives.Add("System.Linq");
+                attrReceiver = SyntaxFactory.InvocationExpression(
+                    ValidSyntaxFactory.MemberAccess(attrReceiver.AddParens(), nameof(Enumerable.FirstOrDefault)), SyntaxFactory.ArgumentList());
+                var attrAccess = SyntaxFactory.InvocationExpression(
+                    SyntaxFactory.MemberBindingExpression(ValidSyntaxFactory.IdentifierName("Attribute")),
+                    ExpressionSyntaxExtensions.CreateArgList(convertedName));
+                // source.FirstOrDefault()?.Attribute("attr")?.Value
+                return SyntaxFactory.ConditionalAccessExpression(attrReceiver,
+                    SyntaxFactory.ConditionalAccessExpression(attrAccess,
+                        SyntaxFactory.MemberBindingExpression(ValidSyntaxFactory.IdentifierName("Value"))));
+            }
+            var singleAttr = SyntaxFactory.InvocationExpression(
+                ValidSyntaxFactory.MemberAccess(attrReceiver.AddParens(), "Attribute"),
+                ExpressionSyntaxExtensions.CreateArgList(convertedName));
+            // element.Attribute("attr")?.Value
+            return SyntaxFactory.ConditionalAccessExpression(singleAttr,
+                SyntaxFactory.MemberBindingExpression(ValidSyntaxFactory.IdentifierName("Value")));
+        }
 
         ExpressionSyntax elements = node.Base != null ? SyntaxFactory.MemberAccessExpression(
             SyntaxKind.SimpleMemberAccessExpression,
@@ -179,8 +207,7 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         );
 
         return SyntaxFactory.InvocationExpression(elements,
-            ExpressionSyntaxExtensions.CreateArgList(
-                await node.Name.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor))
+            ExpressionSyntaxExtensions.CreateArgList(convertedName)
         );
     }
 
