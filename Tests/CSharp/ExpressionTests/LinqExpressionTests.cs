@@ -1312,6 +1312,52 @@ public static partial class M
     }
 
     [Fact]
+    public async Task DefaultPropertyAccessedBareByNameBecomesThisIndexerAsync()
+    {
+        // BMCore ProfitSummary: `Default Public Property Data(t)` accessed
+        // bare inside the class as `Data(k)` (VB implies `Me.Data(k)`). The
+        // C# declaration becomes an indexer `this[...]`, so the reference
+        // must be `this[k]` — the emitted `Data[k]` left CS0103 'Data'.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Linq
+
+Public Class ProfitSummary
+    Default Public ReadOnly Property Data(t As Integer) As Decimal
+        Get
+            Return 0D
+        End Get
+    End Property
+
+    Public ReadOnly Property Total As Decimal
+        Get
+            Return (From k In {1, 2} Select Data(k)).Sum()
+        End Get
+    End Property
+End Class",
+            @"using System.Linq;
+
+public partial class ProfitSummary
+{
+    public decimal this[int t]
+    {
+        get
+        {
+            return 0m;
+        }
+    }
+
+    public decimal Total
+    {
+        get
+        {
+            return (from k in new[] { 1, 2 }
+
+                    select this[k]).Sum();
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

@@ -1794,6 +1794,17 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             ? QualifyNode(node, identifier) : identifier;
 
         var sym = GetSymbolInfoInDocument<ISymbol>(node);
+
+        // A VB Default property accessed bare by its name (`Data(k)` meaning
+        // `Me.Data(k)`) has no named C# counterpart — the declaration becomes
+        // an indexer, so the receiver must be `this` and the invocation wraps
+        // it as `this[k]`. The member-qualified form (`x.Data(k)`) is handled
+        // in VisitMemberAccessExpression.
+        if (sym is IPropertySymbol defaultProp && VBasic.VisualBasicExtensions.IsDefault(defaultProp) && !defaultProp.IsStatic
+            && node.Parent is VBSyntax.InvocationExpressionSyntax parentInvocation && parentInvocation.Expression == node) {
+            return SyntaxFactory.ThisExpression();
+        }
+
         if (sym is ILocalSymbol) {
             if (sym.IsStatic && sym.ContainingSymbol is IMethodSymbol m && m.AssociatedSymbol is IPropertySymbol) {
                 qualifiedIdentifier = qualifiedIdentifier.WithParentPropertyAccessorKind(m.MethodKind);
