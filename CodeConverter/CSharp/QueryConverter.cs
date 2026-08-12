@@ -356,9 +356,51 @@ internal class QueryConverter
         var queryBody = convertedClauses.Any() ? SyntaxFactory.QueryBody(convertedClauses, selectOrGroupClauseSyntax, null) : SyntaxFactory.QueryBody(selectOrGroupClauseSyntax);
         SyntaxToken groupName = GetGroupIdentifier(gcs);
         if (queryBody.SelectOrGroup.HasAnnotation(DefaultSelectAnnotation)) {
-            queryBody = queryBody.WithSelectOrGroup(CreateDefaultSelectClause(groupName));
+            // The VB query has no explicit Select after `Group By keys Into
+            // aggs`, so its element type is the anonymous shape `{keys, aggs}`
+            // — downstream code accesses those members by name. `select
+            // <group>` would instead surface a bare IGrouping with neither
+            // member (CS1061). Project the let-bound names back into that
+            // shape. Falls back to `select <group>` when a key can't be named.
+            queryBody = queryBody.WithSelectOrGroup(
+                CreateImplicitGroupResultProjectionOrNull(gcs, groupName) ?? CreateDefaultSelectClause(groupName));
         }
         return SyntaxFactory.QueryContinuation(groupName, queryBody);
+    }
+
+    private CSSyntax.SelectClauseSyntax CreateImplicitGroupResultProjectionOrNull(VBSyntax.GroupByClauseSyntax gcs, SyntaxToken groupName)
+    {
+        var keyIds = GetGroupKeyIdentifiers(gcs).ToList();
+        // Unnameable key expression or no aggregations — leave the old
+        // `select <group>` shape rather than emit an incomplete projection.
+        if (keyIds.Count != gcs.Keys.Count || !gcs.AggregationVariables.Any()) return null;
+
+        var members = new List<CSSyntax.AnonymousObjectMemberDeclaratorSyntax>();
+        foreach (var keyId in keyIds) {
+            // let-bound earlier in the continuation clauses
+            members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(ValidSyntaxFactory.IdentifierName(keyId)));
+        }
+        foreach (var agg in gcs.AggregationVariables) {
+            var vbName = agg.NameEquals?.Identifier.Identifier.Text
+                         ?? (agg.Aggregation is VBSyntax.FunctionAggregationSyntax fnAgg ? fnAgg.FunctionName.Text
+                             : agg.Aggregation is VBSyntax.GroupAggregationSyntax ? "Group" : null);
+            if (vbName == null) return null;
+            if (agg.Aggregation is VBSyntax.GroupAggregationSyntax) {
+                // The group itself — reference the continuation variable. Use
+                // an explicit name when the identifier differs (e.g. `@group`
+                // fallback) so the member keeps its VB name.
+                members.Add(string.Equals(vbName, groupName.ValueText, StringComparison.Ordinal)
+                    ? SyntaxFactory.AnonymousObjectMemberDeclarator(ValidSyntaxFactory.IdentifierName(groupName.Text))
+                    : SyntaxFactory.AnonymousObjectMemberDeclarator(
+                        SyntaxFactory.NameEquals(ValidSyntaxFactory.IdentifierName(vbName)),
+                        ValidSyntaxFactory.IdentifierName(groupName.Text)));
+            } else {
+                // Function aggregations were let-bound under this name.
+                members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(ValidSyntaxFactory.IdentifierName(vbName)));
+            }
+        }
+        return SyntaxFactory.SelectClause(
+            SyntaxFactory.AnonymousObjectCreationExpression(SyntaxFactory.SeparatedList(members)));
     }
 
     private async Task<IEnumerable<CSSyntax.ExpressionSyntax>> GetLinqArgumentsAsync(SyntaxToken reusableCsFromId,

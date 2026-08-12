@@ -35,7 +35,7 @@ public partial class Issue895
                          group x by x into Group
                          let x = Group.Key
                          where Group.Count() > 1
-                         select Group;
+                         select new { x, Group };
         Console.WriteLine(duplicates.Count());
     }
 }");
@@ -76,7 +76,7 @@ public static partial class Module1
                      group f by f.MyString into @group
                      let MyString = @group.Key
                      orderby MyString
-                     select @group;
+                     select new { MyString, Group = @group };
     }
 }");
     }
@@ -1560,10 +1560,60 @@ public static partial class M
 CS1023: Embedded statement cannot be a declaration or labeled statement");
     }
 
-    [Fact(Skip = "TDD: CS1929 `IGrouping.Sum()` (7 sites) — still emitted for some Group.Sum without arg after agg-arg fix. Needs a repro showing where CreateGroupByProjectionAsync path isn't reached")]
-    public async Task IGroupingSumRemainingSitesAsync()
+    [Fact]
+    public async Task GroupByImplicitSelectProjectsKeyAndAggregationsAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // BMCore PickListUpdater: `From pp In pps Group By pp.Wave Into
+        // AsEnumerable Order By AsEnumerable.Count Descending` (no explicit
+        // Select). The VB result element is the anonymous shape
+        // `{Wave, AsEnumerable}` — downstream does `w.Wave` / `w.AsEnumerable`.
+        // The let-emission path bound those names for in-query clauses but the
+        // implicit final select still emitted `select Group`, handing
+        // downstream a bare IGrouping with neither member (CS1061 x18).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Pre
+    Public Property Wave As Integer
+    Public Property IsMultiItem As Boolean
+End Class
+
+Public Module M
+    Public Sub Do1(pps As List(Of Pre))
+        Dim multiItemWaves = (From pp In pps Where pp.IsMultiItem Group By pp.Wave Into AsEnumerable Order By AsEnumerable.Count Descending).ToList
+        Dim waves = multiItemWaves.Select(Function(w) w.Wave).ToList()
+        For Each w In multiItemWaves
+            Dim pps2 = w.AsEnumerable.ToList()
+        Next
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Pre
+{
+    public int Wave { get; set; }
+    public bool IsMultiItem { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(List<Pre> pps)
+    {
+        var multiItemWaves = (from pp in pps
+                              where pp.IsMultiItem
+                              group pp by pp.Wave into Group
+                              let Wave = Group.Key
+                              let AsEnumerable = Group.AsEnumerable()
+                              orderby AsEnumerable.Count() descending
+                              select new { Wave, AsEnumerable }).ToList();
+        var waves = multiItemWaves.Select(w => w.Wave).ToList();
+        foreach (var w in multiItemWaves)
+        {
+            var pps2 = w.AsEnumerable.ToList();
+        }
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS1503 `TKey` → `Guid` (10 sites). Generic dictionary extension called on `Dictionary<Guid, T>` where TKey should bind Guid but codeconv drops type args")]
@@ -2065,7 +2115,7 @@ public static partial class M
                  let Group = @group.Key
                  let AsEnumerable = @group.AsEnumerable()
                  orderby Group
-                 select @group).ToList();
+                 select new { Group, AsEnumerable }).ToList();
     }
 }");
     }
