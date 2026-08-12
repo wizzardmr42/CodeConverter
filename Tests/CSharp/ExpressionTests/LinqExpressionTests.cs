@@ -1990,6 +1990,33 @@ public static partial class M
     }
 
     [Fact]
+    public async Task UnaryMinusOnEnumCastsToUnderlyingAsync()
+    {
+        // BMCore CalculateBonusRateTask: `ThisYearToDate.AddDays(-tyDay + 1)`
+        // where tyDay is DayOfWeek. VB converts the enum operand to its
+        // underlying type for unary minus; C# has no enum unary minus
+        // (CS0023).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+
+Public Module M
+    Public Function LastMonday(d As DateTime) As DateTime
+        Dim tyDay = d.DayOfWeek
+        Return d.AddDays(-tyDay + 1)
+    End Function
+End Module",
+            @"using System;
+
+public static partial class M
+{
+    public static DateTime LastMonday(DateTime d)
+    {
+        var tyDay = d.DayOfWeek;
+        return d.AddDays(-(int)tyDay + 1);
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

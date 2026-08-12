@@ -910,6 +910,13 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             }
         }
 
+        // VB `-someEnum` converts the operand to its underlying type; C# has
+        // no unary minus/plus for enums (CS0023) — make the cast explicit.
+        if (kind is SyntaxKind.UnaryMinusExpression or SyntaxKind.UnaryPlusExpression
+            && _semanticModel.GetTypeInfo(node.Operand).Type is INamedTypeSymbol { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } enumUnderlying }) {
+            expr = ValidSyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(enumUnderlying), expr.AddParens());
+        }
+
         return SyntaxFactory.PrefixUnaryExpression(
             kind,
             SyntaxFactory.Token(csTokenKind),
