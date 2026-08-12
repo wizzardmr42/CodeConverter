@@ -127,6 +127,9 @@ internal class TypeConversionAnalyzer
                     && !SymbolEqualityComparer.Default.Equals(vbType, vbConvertedType)) {
                     return CreateDelegateRelaxationWrapper(csNode, srcInvoke, tgtInvoke);
                 }
+                if (TryCreateUserDefinedConversionThroughIntermediate(vbNode, csNode, vbType, vbConvertedType) is { } viaOperator) {
+                    return viaOperator;
+                }
                 return CreateCast(csNode, vbConvertedType);
             case TypeConversionKind.Conversion:
                 return AddExplicitConvertTo(vbNode, csNode, vbType, vbConvertedType);
@@ -145,6 +148,33 @@ internal class TypeConversionAnalyzer
     }
 
     private TypeSyntax GetTypeSyntax(ITypeSymbol type) => (TypeSyntax)_csSyntaxGenerator.TypeExpression(type);
+
+    /// <summary>
+    /// VB chains conversions through a user-defined operator's parameter type:
+    /// `Dim m As MergeData = someInteger` finds `CType(s As String) As
+    /// MergeData` and converts Integer -> String -> MergeData. A C# cast
+    /// `(MergeData)someInteger` can't chain (CS0030) — emit the intermediate
+    /// conversion first, then the operator cast.
+    /// </summary>
+    private ExpressionSyntax TryCreateUserDefinedConversionThroughIntermediate(VBSyntax.ExpressionSyntax vbNode, ExpressionSyntax csNode, ITypeSymbol vbType, ITypeSymbol vbConvertedType)
+    {
+        if (vbType == null || vbConvertedType == null) return null;
+        var vbCompilation = (VBasic.VisualBasicCompilation)_semanticModel.Compilation;
+        var conv = vbCompilation.ClassifyConversion(vbType, vbConvertedType);
+        if (!conv.IsUserDefined || conv.MethodSymbol is not IMethodSymbol op || op.Parameters.Length != 1) return null;
+        var opParamType = op.Parameters[0].Type;
+        // Direct operator (source already matches the parameter) — a plain cast works.
+        if (vbCompilation.ClassifyConversion(vbType, opParamType) is not { Exists: true, IsIdentity: false } || SymbolEqualityComparer.Default.Equals(vbType, opParamType)) return null;
+        // If C# provably converts directly, leave the plain cast alone. Types
+        // defined in the VB source being converted have no C# symbol yet —
+        // chain for those too (their converted operator can't chain either).
+        var csSource = GetCSType(vbType);
+        var csTarget = GetCSType(vbConvertedType);
+        if (csSource != null && csTarget != null && _csCompilation.ClassifyConversion(csSource, csTarget).Exists) return null;
+
+        var intermediate = AddExplicitConvertTo(vbNode, csNode, vbType, opParamType);
+        return CreateCast(intermediate, vbConvertedType);
+    }
 
     /// <summary>
     /// VB delegate relaxation: adapt a delegate value to an incompatible
@@ -520,7 +550,8 @@ internal class TypeConversionAnalyzer
                  nullableTargetType != null && currentType.SpecialType == SpecialType.System_Object) {
             // We don't have matching Conversions method
             // or there is a cast from Object to Nullable that doesn't require Conversions
-            return CreateCast(csNode, targetType);
+            return TryCreateUserDefinedConversionThroughIntermediate(vbNode, csNode, currentType, targetType)
+                   ?? CreateCast(csNode, targetType);
         } else {
             // Need to use Conversions rather than Convert to match what VB does, eg. Conversions.ToInteger(True) -> -1
             memberAccess = GetConversionsMemberAccess(methodId.Name);

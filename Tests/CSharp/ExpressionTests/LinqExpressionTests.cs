@@ -1677,6 +1677,47 @@ public static partial class M
     }
 
     [Fact]
+    public async Task UserDefinedConversionChainsThroughOperatorParameterTypeAsync()
+    {
+        // BMCore Order.Label: `Return Me._Order.ExternalOrderID` where the
+        // return type is MergeData — MergeData only has `CType(s As String)`,
+        // so VB chains Integer -> String -> MergeData. The emitted
+        // `(MergeData)intValue` can't chain in C# (CS0030 x2). Emit the
+        // intermediate conversion, then the operator cast.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class MergeData
+    Public Property Value As String
+    Public Shared Widening Operator CType(s As String) As MergeData
+        Return New MergeData With {.Value = s}
+    End Operator
+End Class
+
+Public Class C
+    Private _ID As Integer
+    Public Function GetData() As MergeData
+        Return _ID
+    End Function
+End Class",
+            @"
+public partial class MergeData
+{
+    public string Value { get; set; }
+    public static implicit operator MergeData(string s)
+    {
+        return new MergeData() { Value = s };
+    }
+}
+
+public partial class C
+{
+    private int _ID;
+    public MergeData GetData()
+    {
+        return (MergeData)_ID.ToString();
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
