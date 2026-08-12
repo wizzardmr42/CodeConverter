@@ -1718,6 +1718,56 @@ public partial class C
     }
 
     [Fact]
+    public async Task ChainedSingleVarSelectsNarrowImplicitSelectAsync()
+    {
+        // BMCore AmazonScraper: `From k In ... Select d = dict(k) Where ...
+        // Select sfm = d.Machine Where sfm IsNot Nothing).ToArray` assigned
+        // to a Machine() array. Each single-var Select REPLACES the element
+        // (k and d go out of VB scope). The all-range-vars implicit
+        // projection regressed this to `select new { k, d, sfm }` (run43
+        // CS0029 x5) — live-name tracking must narrow the implicit select to
+        // just `sfm`.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Machine
+    Public Property ID As Integer
+End Class
+
+Public Module M
+    Public Function Do1(keys As List(Of Integer), dict As Dictionary(Of Integer, Machine)) As Machine()
+        Return (From k In keys
+                Where dict.ContainsKey(k)
+                Select d = dict(k)
+                Where d.ID > 0
+                Select sfm = d
+                Where sfm IsNot Nothing).ToArray()
+    End Function
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Machine
+{
+    public int ID { get; set; }
+}
+
+public static partial class M
+{
+    public static Machine[] Do1(List<int> keys, Dictionary<int, Machine> dict)
+    {
+        return (from k in keys
+                where dict.ContainsKey(k)
+                let d = dict[k]
+                where d.ID > 0
+                let sfm = d
+                where sfm != null
+                select sfm).ToArray();
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

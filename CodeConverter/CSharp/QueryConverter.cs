@@ -98,22 +98,26 @@ internal class QueryConverter
     /// <summary>
     ///  TODO: Don't bother with reversing, rewrite ConvertQueryWithContinuation to recurse on them the right way around
     /// </summary>
-    private async Task<List<(Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, VBSyntax.QueryClauseSyntax)>, VBSyntax.QueryClauseSyntax)>> GetQuerySegmentsAsync(Queue<VBSyntax.QueryClauseSyntax> vbBodyClauses)
+    private async Task<List<(Queue<QuerySection>, VBSyntax.QueryClauseSyntax)>> GetQuerySegmentsAsync(Queue<VBSyntax.QueryClauseSyntax> vbBodyClauses)
     {
         var querySegments =
-            new List<(Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, VBSyntax.QueryClauseSyntax)>,
+            new List<(Queue<QuerySection>,
                 VBSyntax.QueryClauseSyntax)>();
         while (vbBodyClauses.Any()) {
             var querySectionsReversed =
-                new Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, VBSyntax.QueryClauseSyntax)>();
+                new Queue<QuerySection>();
             while (vbBodyClauses.Any() && !RequiresMethodInvocation(vbBodyClauses.Peek()) && !EndsInSelect(querySectionsReversed)) {
                 var convertedClauses = new List<CSSyntax.QueryClauseSyntax>();
+                var vbClauses = new List<VBSyntax.QueryClauseSyntax>();
                 while (IsPartOfSegment(vbBodyClauses)) {
-                    convertedClauses.AddRange(await ConvertQueryBodyClauseAsync(vbBodyClauses.Dequeue()));
+                    var vbClause = vbBodyClauses.Dequeue();
+                    vbClauses.Add(vbClause);
+                    convertedClauses.AddRange(await ConvertQueryBodyClauseAsync(vbClause));
                 }
 
-                var convertQueryBodyClauses = (SyntaxFactory.List(convertedClauses),
-                    vbBodyClauses.Any() && !RequiresMethodInvocation(vbBodyClauses.Peek()) ? vbBodyClauses.Dequeue() : null);
+                var convertQueryBodyClauses = new QuerySection(SyntaxFactory.List(convertedClauses),
+                    vbBodyClauses.Any() && !RequiresMethodInvocation(vbBodyClauses.Peek()) ? vbBodyClauses.Dequeue() : null,
+                    vbClauses);
                 querySectionsReversed.Enqueue(convertQueryBodyClauses);
             }
             querySegments.Add((querySectionsReversed, vbBodyClauses.Any() && !EndsInSelect(querySectionsReversed) ? vbBodyClauses.Dequeue() : null));
@@ -121,8 +125,78 @@ internal class QueryConverter
         return querySegments;
     }
 
-    private static bool EndsInSelect(Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, QueryClauseSyntax)> querySectionsReversed) =>
-        querySectionsReversed.LastOrDefault().Item2 is VBSyntax.SelectClauseSyntax;
+    internal sealed record QuerySection(SyntaxList<CSSyntax.QueryClauseSyntax> ConvertedClauses, VBSyntax.QueryClauseSyntax ClauseEnd, IReadOnlyList<VBSyntax.QueryClauseSyntax> VbClauses);
+
+    private static bool EndsInSelect(Queue<QuerySection> querySectionsReversed) =>
+        querySectionsReversed.LastOrDefault()?.ClauseEnd is VBSyntax.SelectClauseSyntax;
+
+    /// <summary>
+    /// Tracks VB's transparent-identifier scope through a run of query
+    /// clauses: From/Join/Let EXTEND the set of live range variable names, a
+    /// Select (or Group By) REPLACES it. `changed` reports whether anything
+    /// modified the incoming set — an unchanged set means the element shape
+    /// is whatever flowed in, so an implicit select can stay a pass-through.
+    /// </summary>
+    private (List<string> Names, bool Changed) AdvanceLiveNames(IReadOnlyList<string> current, IEnumerable<VBSyntax.QueryClauseSyntax> vbClauses)
+    {
+        var live = current.ToList();
+        bool changed = false;
+        void Add(SyntaxToken vbIdentifier)
+        {
+            var name = CommonConversions.ConvertIdentifier(vbIdentifier).ValueText;
+            if (!live.Contains(name, StringComparer.Ordinal)) {
+                live.Add(name);
+                changed = true;
+            }
+        }
+        foreach (var clause in vbClauses ?? Enumerable.Empty<VBSyntax.QueryClauseSyntax>()) {
+            switch (clause) {
+                case VBSyntax.FromClauseSyntax f:
+                    foreach (var v in f.Variables) Add(v.Identifier.Identifier);
+                    break;
+                case VBSyntax.SimpleJoinClauseSyntax j:
+                    foreach (var v in j.JoinedVariables) Add(v.Identifier.Identifier);
+                    break;
+                case VBSyntax.GroupJoinClauseSyntax gj:
+                    // The joined variable goes OUT of scope; the Into vars come in.
+                    foreach (var agg in gj.AggregationVariables) {
+                        if (agg.NameEquals?.Identifier.Identifier is { } n) Add(n);
+                    }
+                    break;
+                case VBSyntax.LetClauseSyntax l:
+                    foreach (var v in l.Variables) {
+                        if (v.NameEquals?.Identifier.Identifier is { } n) Add(n);
+                    }
+                    break;
+                case VBSyntax.SelectClauseSyntax s:
+                    var selected = s.Variables
+                        .Select(v => (v.NameEquals?.Identifier.Identifier ?? v.Expression.ExtractAnonymousTypeMemberName()) is { } t
+                            ? CommonConversions.ConvertIdentifier(t).ValueText : null)
+                        .Where(n => n != null)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList();
+                    if (selected.Count == s.Variables.Count) {
+                        live = selected;
+                        changed = true;
+                    }
+                    break;
+                case VBSyntax.GroupByClauseSyntax g:
+                    var groupNames = GetGroupKeyIdentifiers(g)
+                        .Concat(g.AggregationVariables.Select(a => a.NameEquals?.Identifier.Identifier.Text
+                            ?? (a.Aggregation is VBSyntax.FunctionAggregationSyntax fn ? fn.FunctionName.Text
+                                : a.Aggregation is VBSyntax.GroupAggregationSyntax ? "Group" : null)))
+                        .Where(n => n != null)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList();
+                    if (groupNames.Any()) {
+                        live = groupNames;
+                        changed = true;
+                    }
+                    break;
+            }
+        }
+        return (live, changed);
+    }
 
     private static bool IsPartOfSegment(Queue<QueryClauseSyntax> vbBodyClauses) =>
         vbBodyClauses.Any() && !RequiredContinuation(vbBodyClauses) && !RequiresMethodInvocation(vbBodyClauses.Peek());
@@ -143,7 +217,7 @@ internal class QueryConverter
                && vbBodyClauses.Skip(1).Any(RequiresMethodInvocation);
     }
 
-    private async Task<CSharpSyntaxNode> ConvertQuerySegmentsAsync(IEnumerable<(Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, VBSyntax.QueryClauseSyntax)>, VBSyntax.QueryClauseSyntax)> querySegments, SyntaxToken reusableFromCsId, CSSyntax.FromClauseSyntax fromClauseSyntax = null)
+    private async Task<CSharpSyntaxNode> ConvertQuerySegmentsAsync(IEnumerable<(Queue<QuerySection>, VBSyntax.QueryClauseSyntax)> querySegments, SyntaxToken reusableFromCsId, CSSyntax.FromClauseSyntax fromClauseSyntax = null)
     {
         CSSyntax.ExpressionSyntax query = null;
         IReadOnlyCollection<string> anonMembersInScope = null;
@@ -151,8 +225,9 @@ internal class QueryConverter
             // Capture the segment's last VB clause BEFORE ConvertQueryWith-
             // ContinuationAsync drains the queue — used to detect a
             // single-item Select renaming the range variable.
-            var lastVbClauseInSegment = queryContinuation.LastOrDefault().Item2;
-            var subQuery = await ConvertQueryWithContinuationAsync(queryContinuation, reusableFromCsId);
+            var lastVbClauseInSegment = queryContinuation.LastOrDefault()?.ClauseEnd;
+            var segmentSeedNames = (IReadOnlyList<string>)(anonMembersInScope?.ToList() ?? new List<string> { reusableFromCsId.ValueText });
+            var subQuery = await ConvertQueryWithContinuationAsync(queryContinuation, reusableFromCsId, segmentSeedNames);
             if (fromClauseSyntax == null) {
                 fromClauseSyntax = subQuery.Clauses.OfType<CSSyntax.FromClauseSyntax>().First();
                 subQuery = subQuery.WithClauses(subQuery.Clauses.Remove(fromClauseSyntax));
@@ -206,7 +281,14 @@ internal class QueryConverter
                 if (renamed is { } renamedToken) {
                     reusableFromCsId = CommonConversions.ConvertIdentifier(renamedToken).WithoutSourceMapping();
                 }
+            } else if (_lastImplicitSelectSingleName is { } singleLiveName
+                       && singleLiveName != reusableFromCsId.ValueText) {
+                // A mid-segment VB Select (converted to a let) replaced the
+                // element with one named value and the implicit segment end
+                // selected it — the next segment's clauses reference that name.
+                reusableFromCsId = SyntaxFactory.Identifier(singleLiveName).WithoutSourceMapping();
             }
+            _lastImplicitSelectSingleName = null;
             fromClauseSyntax = SyntaxFactory.FromClause(reusableFromCsId, query);
         }
 
@@ -227,50 +309,47 @@ internal class QueryConverter
         return invocationExpressionSyntax;
     }
 
-    private async Task<CSSyntax.QueryBodySyntax> ConvertQueryWithContinuationAsync(Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, VBSyntax.QueryClauseSyntax)> querySectionsReversed, SyntaxToken reusableCsFromId)
+    private async Task<CSSyntax.QueryBodySyntax> ConvertQueryWithContinuationAsync(Queue<QuerySection> querySectionsReversed, SyntaxToken reusableCsFromId, IReadOnlyList<string> seedLiveNames)
     {
         if (!querySectionsReversed.Any()) return null;
-        var (convertedClauses, clauseEnd) = querySectionsReversed.Dequeue();
-        var nestedClause = await ConvertQueryWithContinuationAsync(querySectionsReversed, reusableCsFromId);
-        var convertSubQueryAsync = await ConvertSubQueryAsync(reusableCsFromId, clauseEnd, nestedClause, convertedClauses);
+        var section = querySectionsReversed.Dequeue();
+        var (liveNames, liveChanged) = AdvanceLiveNames(seedLiveNames, section.VbClauses);
+        var liveAfterEnd = section.ClauseEnd is null ? (liveNames, liveChanged) : AdvanceLiveNames(liveNames, new[] { section.ClauseEnd });
+        var nestedClause = await ConvertQueryWithContinuationAsync(querySectionsReversed, reusableCsFromId, liveAfterEnd.Item1);
+        var convertSubQueryAsync = await ConvertSubQueryAsync(reusableCsFromId, section.ClauseEnd, nestedClause, section.ConvertedClauses, liveNames, liveChanged);
         return convertSubQueryAsync;
     }
 
+    /// <summary>
+    /// When the last processed implicit select reduced to a single non-fromvar
+    /// live name (a mid-segment VB Select converted to a let), the next
+    /// segment's range variable must take that name. Communicated via this
+    /// field because the recursion doesn't return shape info.
+    /// </summary>
+    private string _lastImplicitSelectSingleName;
+
     private async Task<CSSyntax.QueryBodySyntax> ConvertSubQueryAsync(SyntaxToken reusableCsFromId, VBSyntax.QueryClauseSyntax clauseEnd,
-        CSSyntax.QueryBodySyntax nestedClause, SyntaxList<CSSyntax.QueryClauseSyntax> convertedClauses)
+        CSSyntax.QueryBodySyntax nestedClause, SyntaxList<CSSyntax.QueryClauseSyntax> convertedClauses, IReadOnlyList<string> liveNames, bool liveChanged)
     {
         CSSyntax.SelectOrGroupClauseSyntax selectOrGroup;
         CSSyntax.QueryContinuationSyntax queryContinuation = null;
         switch (clauseEnd) {
             case null:
                 // A VB query with no explicit Select yields its transparent-
-                // identifier shape: every additional From / Join (the Into var
-                // for a Group Join, the join var otherwise) / Let extends the
-                // element to `{ <from-var>, <var>... }`. Downstream code does
-                // `item.dw` / `d.sl.X` / `c.assignedDetails`. C#'s default
-                // `select <from-var>` drops all of them (CS1061). Project the
-                // full shape whenever any extra range variable is in scope.
-                var extraRangeVars = convertedClauses.SelectMany(c => c switch {
-                    CSSyntax.FromClauseSyntax f => new[] { f.Identifier },
-                    CSSyntax.JoinClauseSyntax j => new[] { j.Into?.Identifier ?? j.Identifier },
-                    CSSyntax.LetClauseSyntax l => new[] { l.Identifier },
-                    _ => Array.Empty<SyntaxToken>()
-                })
-                    // The segment's own leading `from` can be in convertedClauses
-                    // (it's extracted by the caller afterwards) — don't repeat it.
-                    .Where(t => t.ValueText != reusableCsFromId.ValueText)
-                    .ToList();
-                if (extraRangeVars.Any()) {
-                    var members = new List<CSSyntax.AnonymousObjectMemberDeclaratorSyntax> {
-                        SyntaxFactory.AnonymousObjectMemberDeclarator(
-                            ValidSyntaxFactory.IdentifierName(reusableCsFromId))
-                    };
-                    foreach (var extraId in extraRangeVars) {
-                        members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(
-                            ValidSyntaxFactory.IdentifierName(extraId)));
-                    }
+                // identifier shape, tracked through the clauses by
+                // AdvanceLiveNames: From/Join/Let EXTEND the element, a
+                // mid-query Select (even one converted to a let) REPLACES it.
+                // Emit `select new { a, b }` for a multi-name shape,
+                // `select b` when a Select narrowed to one name, and the
+                // pass-through `select <fromvar>` when nothing changed.
+                if (liveChanged && liveNames.Count > 1) {
+                    var members = liveNames.Select(n =>
+                        SyntaxFactory.AnonymousObjectMemberDeclarator(ValidSyntaxFactory.IdentifierName(n)));
                     var anon = SyntaxFactory.AnonymousObjectCreationExpression(SyntaxFactory.SeparatedList(members));
                     selectOrGroup = SyntaxFactory.SelectClause(anon);
+                } else if (liveChanged && liveNames.Count == 1 && liveNames[0] != reusableCsFromId.ValueText) {
+                    selectOrGroup = SyntaxFactory.SelectClause(ValidSyntaxFactory.IdentifierName(liveNames[0]));
+                    _lastImplicitSelectSingleName = liveNames[0];
                 } else {
                     selectOrGroup = CreateDefaultSelectClause(reusableCsFromId).WithAdditionalAnnotations(DefaultSelectAnnotation);
                 }
