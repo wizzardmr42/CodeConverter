@@ -1947,6 +1947,49 @@ public static partial class M
     }
 
     [Fact]
+    public async Task LambdaParamTypesTakenFromTargetDelegateAsync()
+    {
+        // BMCore DiaryItem.AssignedToUserExpression: the lambda declares
+        // `UserID As Short` for an Expression(Of Func(Of _, Long, _)) slot.
+        // VB relaxes the mismatch; C# requires exact parameter types
+        // (CS1678/CS1661 x2). Substitute the delegate's parameter types.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Linq
+Imports System.Linq.Expressions
+
+Public Class Item
+    Public Property AssignedToUserID As Short?
+End Class
+
+Public Module M
+    Public ReadOnly Property AssignedToUserExpression As Expression(Of Func(Of IQueryable(Of Item), Long, IQueryable(Of Item)))
+        Get
+            Return Function(q As IQueryable(Of Item), UserID As Short) From di In q Where di.AssignedToUserID = UserID
+        End Get
+    End Property
+End Module",
+            @"using System;
+using System.Linq;
+using System.Linq.Expressions;
+
+public partial class Item
+{
+    public short? AssignedToUserID { get; set; }
+}
+
+public static partial class M
+{
+    public static Expression<Func<IQueryable<Item>, long, IQueryable<Item>>> AssignedToUserExpression
+    {
+        get
+        {
+            return (q, UserID) => from di in q where di.AssignedToUserID == UserID select di;
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

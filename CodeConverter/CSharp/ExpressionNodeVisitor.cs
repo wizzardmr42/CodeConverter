@@ -1628,8 +1628,35 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             }
 
             var param = await node.SubOrFunctionHeader.ParameterList.AcceptAsync<ParameterListSyntax>(TriviaConvertingExpressionVisitor);
+            param = ReconcileLambdaParameterTypesWithDelegate(node, param);
             return await _lambdaConverter.ConvertAsync(node, param, convertedStatements);
         }
+    }
+
+    /// <summary>
+    /// VB relaxes a lambda whose explicit parameter types differ from the
+    /// target delegate's (`Function(q, UserID As Short)` for a
+    /// Func(Of _, Long, _) slot). C# requires an exact match (CS1678/CS1661)
+    /// — substitute the delegate's parameter types.
+    /// </summary>
+    private ParameterListSyntax ReconcileLambdaParameterTypesWithDelegate(VBasic.Syntax.LambdaExpressionSyntax node, ParameterListSyntax param)
+    {
+        if (param == null || param.Parameters.Count == 0) return param;
+        var lambdaConverted = _semanticModel.GetTypeInfo(node).ConvertedType as INamedTypeSymbol;
+        if (lambdaConverted is { Name: nameof(System.Linq.Expressions.Expression), Arity: 1 }
+            && lambdaConverted.TypeArguments[0] is INamedTypeSymbol expressionInner) {
+            lambdaConverted = expressionInner;
+        }
+        var invoke = lambdaConverted?.DelegateInvokeMethod;
+        if (invoke == null || invoke.Parameters.Length != param.Parameters.Count) return param;
+        var updated = param.Parameters.Select((p, i) => {
+            if (p.Type == null) return p;
+            var delegateParamType = invoke.Parameters[i].Type;
+            if (delegateParamType.TypeKind == TypeKind.Error) return p;
+            var delegateTypeSyntax = CommonConversions.GetTypeSyntax(delegateParamType);
+            return p.Type.IsEquivalentTo(delegateTypeSyntax) ? p : p.WithType(delegateTypeSyntax.WithTriviaFrom(p.Type));
+        });
+        return param.WithParameters(SyntaxFactory.SeparatedList(updated));
     }
 
     public override async Task<CSharpSyntaxNode> VisitMultiLineLambdaExpression(VBasic.Syntax.MultiLineLambdaExpressionSyntax node)
@@ -1651,6 +1678,7 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         {
             var body = await ConvertMethodBodyStatementsAsync(node, node.Statements);
             var param = await node.SubOrFunctionHeader.ParameterList.AcceptAsync<ParameterListSyntax>(TriviaConvertingExpressionVisitor);
+            param = ReconcileLambdaParameterTypesWithDelegate(node, param);
             return await _lambdaConverter.ConvertAsync(node, param, body.ToList());
         }
     }
