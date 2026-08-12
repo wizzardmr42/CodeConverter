@@ -206,23 +206,31 @@ internal class QueryConverter
         CSSyntax.QueryContinuationSyntax queryContinuation = null;
         switch (clauseEnd) {
             case null:
-                // If a Group Join `Into <name>` is in scope, VB's implicit projection
-                // is `{ <from-var>, <into-var> }`. C#'s default `select <from-var>`
-                // loses <into-var>, and downstream references like `c.sc` or
-                // `c.assignedDetails` fail (issue #29-adjacent). Emit an explicit
-                // anonymous type projection when we see one.
-                var groupJoinIntos = convertedClauses.OfType<CSSyntax.JoinClauseSyntax>()
-                    .Where(j => j.Into != null)
-                    .Select(j => j.Into.Identifier)
+                // A VB query with no explicit Select yields its transparent-
+                // identifier shape: every additional From / Join (the Into var
+                // for a Group Join, the join var otherwise) / Let extends the
+                // element to `{ <from-var>, <var>... }`. Downstream code does
+                // `item.dw` / `d.sl.X` / `c.assignedDetails`. C#'s default
+                // `select <from-var>` drops all of them (CS1061). Project the
+                // full shape whenever any extra range variable is in scope.
+                var extraRangeVars = convertedClauses.SelectMany(c => c switch {
+                    CSSyntax.FromClauseSyntax f => new[] { f.Identifier },
+                    CSSyntax.JoinClauseSyntax j => new[] { j.Into?.Identifier ?? j.Identifier },
+                    CSSyntax.LetClauseSyntax l => new[] { l.Identifier },
+                    _ => Array.Empty<SyntaxToken>()
+                })
+                    // The segment's own leading `from` can be in convertedClauses
+                    // (it's extracted by the caller afterwards) — don't repeat it.
+                    .Where(t => t.ValueText != reusableCsFromId.ValueText)
                     .ToList();
-                if (groupJoinIntos.Any()) {
+                if (extraRangeVars.Any()) {
                     var members = new List<CSSyntax.AnonymousObjectMemberDeclaratorSyntax> {
                         SyntaxFactory.AnonymousObjectMemberDeclarator(
                             ValidSyntaxFactory.IdentifierName(reusableCsFromId))
                     };
-                    foreach (var intoId in groupJoinIntos) {
+                    foreach (var extraId in extraRangeVars) {
                         members.Add(SyntaxFactory.AnonymousObjectMemberDeclarator(
-                            ValidSyntaxFactory.IdentifierName(intoId)));
+                            ValidSyntaxFactory.IdentifierName(extraId)));
                     }
                     var anon = SyntaxFactory.AnonymousObjectCreationExpression(SyntaxFactory.SeparatedList(members));
                     selectOrGroup = SyntaxFactory.SelectClause(anon);

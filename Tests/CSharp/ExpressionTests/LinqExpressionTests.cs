@@ -1622,6 +1622,112 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
+    [Fact]
+    public async Task ImplicitSelectProjectsAllRangeVariablesAsync()
+    {
+        // BMCore StockLevelDetail / CourierService: a VB query with multiple
+        // From/Join/Let range variables and NO explicit Select produces the
+        // transparent-identifier shape `{detail, sl, si}` — downstream code
+        // does `d.sl.X` / `d.detail.X` / `item.dw`. The C# implicit select
+        // previously picked only the first range variable (`select detail`),
+        // so every downstream member access failed (CS1061 x20+).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Bz
+    Public Property ID As Integer
+End Class
+
+Public Class Dw
+    Public Property WeightG As Integer
+End Class
+
+Public Module M
+    Public Sub Do1(bzs As List(Of Bz), dws As List(Of Dw))
+        Dim q = From bz In bzs
+                From dw In dws
+        Dim heavy = q.Where(Function(item) item.dw.WeightG > 100 AndAlso item.bz.ID > 0).ToList()
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Bz
+{
+    public int ID { get; set; }
+}
+
+public partial class Dw
+{
+    public int WeightG { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(List<Bz> bzs, List<Dw> dws)
+    {
+        var q = from bz in bzs
+                from dw in dws
+                select new { bz, dw };
+        var heavy = q.Where(item => item.dw.WeightG > 100 && item.bz.ID > 0).ToList();
+    }
+}");
+    }
+
+    [Fact]
+    public async Task ImplicitSelectProjectsJoinAndLetVariablesAsync()
+    {
+        // Companion to ImplicitSelectProjectsAllRangeVariablesAsync: Join
+        // (without Into) and Let also extend VB's transparent identifier.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Detail
+    Public Property ID As Integer
+End Class
+
+Public Class Level
+    Public Property ID As Integer
+    Public Property Qty As Integer
+End Class
+
+Public Module M
+    Public Sub Do1(details As List(Of Detail), levels As List(Of Level))
+        Dim q = From detail In details
+                Join sl In levels On sl.ID Equals detail.ID
+                Let herald = sl.Qty * 2
+                Where sl.Qty > 0
+        Dim r = q.Select(Function(d) d.detail.ID + d.sl.Qty + d.herald).ToList()
+    End Sub
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Detail
+{
+    public int ID { get; set; }
+}
+
+public partial class Level
+{
+    public int ID { get; set; }
+    public int Qty { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(List<Detail> details, List<Level> levels)
+    {
+        var q = from detail in details
+                join sl in levels on detail.ID equals sl.ID
+                let herald = sl.Qty * 2
+                where sl.Qty > 0
+                select new { detail, sl, herald };
+        var r = q.Select(d => d.detail.ID + d.sl.Qty + d.herald).ToList();
+    }
+}");
+    }
+
     [Fact(Skip = "TDD: CS1503 `T` → concrete type (5 sites, WaveBuilder+UpdateStockItemPurchasePricesTask). Loop var in an untyped List<T> context can't add to concrete-typed list — needs type-constraint recovery from enclosing method")]
     public async Task GenericTLoopVarToConcreteListAsync()
     {
