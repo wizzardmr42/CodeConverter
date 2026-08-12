@@ -82,7 +82,13 @@ internal class CommonConversions
             var declaredSymbol = SemanticModel.GetDeclaredSymbol(name);
             if (symbolsToSkip?.Contains(declaredSymbol, SymbolEqualityComparer.IncludeNullability) == true) continue;
             var declaredSymbolType = declaredSymbol.GetSymbolType();
-            declaredSymbolType = WidenTypeForReassignments(declaredSymbol as ILocalSymbol, declaredSymbolType, declarator);
+            var widenedSymbolType = WidenTypeForReassignments(declaredSymbol as ILocalSymbol, declaredSymbolType, declarator);
+            if (!ReferenceEquals(widenedSymbolType, declaredSymbolType)) {
+                declaredSymbolType = widenedSymbolType;
+                // `var` would re-infer the narrow initializer type — the
+                // widened declaration must be spelled out.
+                preferExplicitType = true;
+            }
             var equalsValueClauseSyntax = await ConvertEqualsValueClauseSyntaxAsync(declarator, name, vbInitValue, declaredSymbolType, declaredSymbol, initializerOrMethodDecl);
             var v = SyntaxFactory.VariableDeclarator(ConvertIdentifier(name.Identifier), null, equalsValueClauseSyntax);
             string k = declaredSymbolType?.GetFullMetadataName() ?? name.ToString();//Use likely unique key if the type symbol isn't available
