@@ -1195,7 +1195,7 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: Select-rename with Distinct (CS0103 cluster ~17 sites — u/o/k/z single-letter loop vars)")]
+    [Fact]
     public async Task SelectRenameWithDistinctPreservesRenamedVarAsync()
     {
         // VB `Select u = r.AuthorisedBy Distinct` renames the range variable

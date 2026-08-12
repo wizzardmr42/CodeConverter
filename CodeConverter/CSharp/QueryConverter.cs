@@ -127,8 +127,21 @@ internal class QueryConverter
     private static bool IsPartOfSegment(Queue<QueryClauseSyntax> vbBodyClauses) =>
         vbBodyClauses.Any() && !RequiredContinuation(vbBodyClauses) && !RequiresMethodInvocation(vbBodyClauses.Peek());
 
-    private static bool RequiredContinuation(Queue<QueryClauseSyntax> vbBodyClauses) =>
-        RequiredContinuation(vbBodyClauses.Peek(), vbBodyClauses.Count - 1);
+    private static bool RequiredContinuation(Queue<QueryClauseSyntax> vbBodyClauses)
+    {
+        if (RequiredContinuation(vbBodyClauses.Peek(), vbBodyClauses.Count - 1)) return true;
+        // A single-var Select REPLACES the element (VB puts prior range vars
+        // out of scope). The let-emission fallback keeps the old element alive
+        // — harmless while everything stays in one query, but wrong once a
+        // method-invocation boundary (Distinct/Skip/Take) materialises the
+        // element: Distinct dedups the stale {old, new} shape instead of the
+        // selected value, and the new name is dropped at the boundary
+        // (CS0103). Force a real `select` in that case; the rename rebinding
+        // in ConvertQuerySegmentsAsync gives downstream clauses the right
+        // range variable.
+        return vbBodyClauses.Peek() is VBSyntax.SelectClauseSyntax { Variables.Count: 1 }
+               && vbBodyClauses.Skip(1).Any(RequiresMethodInvocation);
+    }
 
     private async Task<CSharpSyntaxNode> ConvertQuerySegmentsAsync(IEnumerable<(Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, VBSyntax.QueryClauseSyntax)>, VBSyntax.QueryClauseSyntax)> querySegments, SyntaxToken reusableFromCsId, CSSyntax.FromClauseSyntax fromClauseSyntax = null)
     {
