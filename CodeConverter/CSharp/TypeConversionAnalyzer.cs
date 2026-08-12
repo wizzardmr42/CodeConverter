@@ -188,11 +188,15 @@ internal class TypeConversionAnalyzer
         var paramNames = tgtInvoke.Parameters.Select((p, i) => "relaxArg" + (i + 1)).ToList();
         var invokeArgs = SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(
             paramNames.Select(n => SyntaxFactory.Argument(ValidSyntaxFactory.IdentifierName(n)))));
-        ExpressionSyntax body = SyntaxFactory.InvocationExpression(csNode.AddParens(), invokeArgs);
+        // A parenthesized simple callee makes `(matchFunc)(arg)` parse as a
+        // cast treating matchFunc as a type name (CS0118) — keep identifier
+        // and member-access callees bare.
+        var callee = csNode.SkipIntoParens() is CSSyntax.IdentifierNameSyntax or CSSyntax.MemberAccessExpressionSyntax
+            ? csNode.SkipIntoParens()
+            : csNode.AddParens();
+        ExpressionSyntax body = SyntaxFactory.InvocationExpression(callee, invokeArgs);
         if (!SymbolEqualityComparer.Default.Equals(srcInvoke.ReturnType, tgtInvoke.ReturnType) && !tgtInvoke.ReturnsVoid) {
-            // Parenthesize the invocation: `(bool)(matchFunc)(arg)` parses as
-            // a cast chain treating matchFunc as a type name (CS0118).
-            body = ValidSyntaxFactory.CastExpression(GetTypeSyntax(tgtInvoke.ReturnType), SyntaxFactory.ParenthesizedExpression(body));
+            body = ValidSyntaxFactory.CastExpression(GetTypeSyntax(tgtInvoke.ReturnType), body.AddParens());
         }
         if (paramNames.Count == 1) {
             return SyntaxFactory.SimpleLambdaExpression(SyntaxFactory.Parameter(SyntaxFactory.Identifier(paramNames[0])), body);
