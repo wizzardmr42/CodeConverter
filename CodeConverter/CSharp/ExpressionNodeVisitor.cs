@@ -1458,15 +1458,31 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                     if (node.SubOrFunctionHeader.Kind() == VBasic.SyntaxKind.FunctionLambdaHeader) {
                         var bodyType = _semanticModel.GetTypeInfo(node.Body).Type;
                         var lambdaConverted = _semanticModel.GetTypeInfo(node).ConvertedType as INamedTypeSymbol;
+                        // `Expression<Func<...>>` isn't itself a delegate type
+                        // (DelegateInvokeMethod is null) — unwrap to the inner
+                        // delegate so expression-tree lambdas get the same
+                        // return-type reconciliation.
+                        bool isExpressionTreeLambda = false;
+                        if (lambdaConverted is { Name: nameof(System.Linq.Expressions.Expression), Arity: 1 }
+                            && lambdaConverted.TypeArguments[0] is INamedTypeSymbol innerDelegate
+                            && innerDelegate.DelegateInvokeMethod != null) {
+                            lambdaConverted = innerDelegate;
+                            isExpressionTreeLambda = true;
+                        }
                         var delegateReturn = lambdaConverted?.DelegateInvokeMethod?.ReturnType;
                         ITypeSymbol underlying = null;
                         bool bodyIsNullable = bodyType != null && bodyType.IsNullable(out underlying) && underlying != null;
                         if (bodyIsNullable && underlying != null && delegateReturn != null &&
                             SymbolEqualityComparer.Default.Equals(delegateReturn, underlying)) {
+                            bool inExpressionTree = isExpressionTreeLambda || TriviaConvertingExpressionVisitor.IsWithinQuery;
                             ExpressionSyntax defaultLiteral = underlying.SpecialType switch {
-                                SpecialType.System_Boolean when !TriviaConvertingExpressionVisitor.IsWithinQuery
+                                SpecialType.System_Boolean when !inExpressionTree
                                     => LiteralConversions.GetLiteralExpression(false),
                                 SpecialType.System_Boolean => null, // bool? in expression-tree — skip (see comment above)
+                                // A bare `default` literal is illegal inside an
+                                // expression tree (CS8507) — use the typed form.
+                                _ when underlying.IsNumericType() && inExpressionTree
+                                    => SyntaxFactory.DefaultExpression(CommonConversions.GetTypeSyntax(underlying)),
                                 _ when underlying.IsNumericType()
                                     => SyntaxFactory.LiteralExpression(SyntaxKind.DefaultLiteralExpression,
                                         SyntaxFactory.Token(SyntaxKind.DefaultKeyword)),
@@ -1491,6 +1507,18 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                                 SyntaxKind.NotEqualsExpression,
                                 csNode.AddParens(),
                                 LiteralConversions.GetLiteralExpression(0));
+                        } else if (bodyType != null && delegateReturn != null
+                                   && !SymbolEqualityComparer.IncludeNullability.Equals(bodyType, delegateReturn)
+                                   && bodyType.IsFractionalNumericType()
+                                   && (delegateReturn.GetNullableUnderlyingType() ?? delegateReturn).IsIntegralType()) {
+                            // VB `Function(hbl) (...).TotalSeconds` for a
+                            // delegate returning Integer? — VB narrows the
+                            // fractional body with banker's rounding.
+                            // Delegate/expression-tree lambdas skip the normal
+                            // conversion path, leaving CS1662/CS0266. Emits
+                            // `(int?)Math.Round(...)` — expression-tree safe.
+                            csNode = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+                                (VBSyntax.ExpressionSyntax)node.Body, csNode, forceTargetType: delegateReturn);
                         }
                     }
                     var expressionBodyStatement = SyntaxFactory.ExpressionStatement(csNode);

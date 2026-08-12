@@ -1482,6 +1482,111 @@ public static partial class M
     }
 
     [Fact]
+    public async Task ExpressionTreeLambdaNullableBodyUnwrapsToDelegateReturnAsync()
+    {
+        // BMCore PurchaseOrder.TotalIncVATExpression: an Expression(Of
+        // Func(Of Po, Decimal)) lambda whose body is `If(cond, <decimal?
+        // Sum>, 0)` — Decimal? narrowing to the Decimal delegate return. The
+        // existing nullable-body unwrap only looked at DelegateInvokeMethod
+        // of the CONVERTED type, which is null for Expression<Func<...>>
+        // (not itself a delegate), so nothing fired and the emission failed
+        // with CS0266 decimal? -> decimal (x8). Also uses typed
+        // `default(decimal)` — a bare `default` literal is illegal in an
+        // expression tree (CS8507).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Collections.Generic
+Imports System.Linq
+Imports System.Linq.Expressions
+
+Public Class Pol
+    Public Property VatRate As Decimal?
+    Public Property Quantity As Integer
+End Class
+
+Public Class Po
+    Public Property AllLines As List(Of Pol)
+End Class
+
+Public Module M
+    Public ReadOnly Property TotalExpression As Expression(Of Func(Of Po, Decimal))
+        Get
+            Return Function(po) If(po.AllLines.Any(), po.AllLines.Sum(Function(pol) CType(pol.VatRate * pol.Quantity, Decimal?)), 0)
+        End Get
+    End Property
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Linq.Expressions;
+
+public partial class Pol
+{
+    public decimal? VatRate { get; set; }
+    public int Quantity { get; set; }
+}
+
+public partial class Po
+{
+    public List<Pol> AllLines { get; set; }
+}
+
+public static partial class M
+{
+    public static Expression<Func<Po, decimal>> TotalExpression
+    {
+        get
+        {
+            return po => (po.AllLines.Any() ? po.AllLines.Sum(pol => pol.VatRate * pol.Quantity) : 0m) ?? default;
+        }
+    }
+}");
+    }
+
+    [Fact]
+    public async Task LambdaFractionalBodyNarrowsToIntegralDelegateReturnAsync()
+    {
+        // BMCore HeartBeatLog.TimeTakenExpression: `Function(hbl)
+        // (hbl.Completed.Value - hbl.Start).TotalSeconds` for an
+        // Expression(Of Func(Of HeartBeatLog, Integer?)) — the Double body
+        // narrows to Integer? with VB banker's rounding. Delegate-converted
+        // lambdas skipped the conversion path, leaving CS1662/CS0266.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Linq.Expressions
+
+Public Class HeartBeatLog
+    Public Property Start As DateTime
+    Public Property Completed As DateTime?
+End Class
+
+Public Module M
+    Public ReadOnly Property TimeTakenExpression As Expression(Of Func(Of HeartBeatLog, Integer?))
+        Get
+            Return Function(hbl) (hbl.Completed.Value - hbl.Start).TotalSeconds
+        End Get
+    End Property
+End Module",
+            @"using System;
+using System.Linq.Expressions;
+
+public partial class HeartBeatLog
+{
+    public DateTime Start { get; set; }
+    public DateTime? Completed { get; set; }
+}
+
+public static partial class M
+{
+    public static Expression<Func<HeartBeatLog, int?>> TimeTakenExpression
+    {
+        get
+        {
+            return hbl => (int?)Math.Round((hbl.Completed.Value - hbl.Start).TotalSeconds);
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
