@@ -1814,10 +1814,43 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS0029 `short` → `bool` (WavePrioritiser) — VB comparison to non-Boolean result in Boolean context")]
-    public async Task ShortToBoolInBooleanContextAsync()
+    [Fact]
+    public async Task ShortLambdaBodyInPredicateContextUnwrapsWithZeroCheckAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `.Any(Function(x) x.SomeShort)` — VB accepts truthy numeric
+        // in a bool context (non-zero = true). C# rejects (CS0029 short →
+        // bool). Same pattern as the enum-in-Where fix but at the Function
+        // lambda body level for predicate delegates like Any/All/Where.
+        //
+        // Clears CS0029 short → bool at WavePrioritiser (and any similar
+        // truthy-numeric predicate).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Item
+    Public Property QtyScanned As Short
+End Class
+
+Public Module M
+    Public Function CountScanned(items As IEnumerable(Of Item)) As Integer
+        Return items.Where(Function(x) x.QtyScanned).Count()
+    End Function
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Item
+{
+    public short QtyScanned { get; set; }
+}
+
+public static partial class M
+{
+    public static int CountScanned(IEnumerable<Item> items)
+    {
+        return items.Where(x => x.QtyScanned != 0).Count();
+    }
+}");
     }
 
     [Fact]

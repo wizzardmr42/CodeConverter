@@ -1478,6 +1478,19 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                                     csNode.AddParens(),
                                     defaultLiteral);
                             }
+                        } else if (bodyType != null && delegateReturn?.SpecialType == SpecialType.System_Boolean
+                                   && (bodyType.IsNumericType() || bodyType.TypeKind == TypeKind.Enum)) {
+                            // VB `.Any(Function(x) x.SomeShort)` /
+                            // `.Where(Function(x) x.SomeEnum)` — VB accepts
+                            // truthy numeric/enum in a bool context (non-zero
+                            // = true). C# needs `!= 0` (CS0029). Same shape
+                            // as the Where-clause enum unwrap but at the
+                            // Function lambda body level (Any/All/predicate
+                            // callbacks that aren't via VB query syntax).
+                            csNode = SyntaxFactory.BinaryExpression(
+                                SyntaxKind.NotEqualsExpression,
+                                csNode.AddParens(),
+                                LiteralConversions.GetLiteralExpression(0));
                         }
                     }
                     var expressionBodyStatement = SyntaxFactory.ExpressionStatement(csNode);
