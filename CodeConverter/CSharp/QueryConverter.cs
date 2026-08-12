@@ -568,7 +568,17 @@ internal class QueryConverter
             io.TargetMethod.MethodKind == MethodKind.ReducedExtension && io.TargetMethod.Name == nameof(Enumerable.AsEnumerable)) {
             expression = SyntaxFactory.InvocationExpression(ValidSyntaxFactory.MemberAccess(expression, io.TargetMethod.Name), SyntaxFactory.ArgumentList());
         }
+        // VB `From dr As DataRow In dt.Rows` — the explicit range-variable
+        // type matters when the source is a non-generic IEnumerable (VB
+        // inserts an implicit cast). C# has the same construct: `from DataRow
+        // dr in dt.Rows` (compiles to Cast<DataRow>()). Dropping it fails
+        // with CS1934 "could not find an implementation of the query pattern".
+        CSSyntax.TypeSyntax rangeVarType = null;
+        if (collectionRangeVariableSyntax.AsClause is VBSyntax.SimpleAsClauseSyntax asClause) {
+            rangeVarType = await asClause.Type.AcceptAsync<CSSyntax.TypeSyntax>(_triviaConvertingVisitor);
+        }
         var fromClauseSyntax = SyntaxFactory.FromClause(
+            rangeVarType,
             CommonConversions.ConvertIdentifier(collectionRangeVariableSyntax.Identifier.Identifier),
             expression);
         return fromClauseSyntax;

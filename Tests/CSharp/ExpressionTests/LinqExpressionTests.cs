@@ -1765,23 +1765,23 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: DataRowCollection needs .Cast<DataRow>() (CS1934, ~8 sites) — semantic-model precondition needs revisiting; test scaffold doesn't fully bind")]
+    [Fact]
     public async Task DataRowCollectionQuerySourceGetsCastAsync()
     {
-        // VB `From dr In dataTable.Rows` — VB implicitly enumerates the
-        // untyped DataRowCollection as DataRow. C# LINQ requires a typed
-        // source, so `from dr in dt.Rows` fails: `DataRowCollection` has no
-        // `Select` and codeconv can't infer `dr`'s type — CS1934 "could not
-        // find an implementation of the query pattern for source type
-        // 'DataRowCollection'".
-        //
-        // Correct emission: insert `.Cast<DataRow>()` on the source.
+        // BMCore StoreFBAReturnsTask etc: `From dr As DataRow In dt.Rows` —
+        // the explicitly-typed range variable is VB's way of enumerating the
+        // non-generic DataRowCollection. The conversion dropped the type, and
+        // `from dr in dt.Rows` fails with CS1934 "could not find an
+        // implementation of the query pattern for source type
+        // 'DataRowCollection'" (x8). C# has the same construct: a typed
+        // range variable `from DataRow dr in dt.Rows` (compiles to
+        // Cast<DataRow>()).
         await TestConversionVisualBasicToCSharpAsync(@"Imports System.Data
 Imports System.Linq
 
 Public Module M
     Public Sub Do1(dt As DataTable)
-        Dim r = (From dr In dt.Rows Select dr(""Name"")).ToList()
+        Dim r = (From dr As DataRow In dt.Rows Select dr(""Name"")).ToList()
     End Sub
 End Module",
             @"using System.Data;
@@ -1791,7 +1791,7 @@ public static partial class M
 {
     public static void Do1(DataTable dt)
     {
-        var r = (from dr in dt.Rows.Cast<DataRow>()
+        var r = (from DataRow dr in dt.Rows
                  select dr[""Name""]).ToList();
     }
 }");
@@ -1906,11 +1906,10 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS1503 `TKey` → `Guid` (10 sites). Generic dictionary extension called on `Dictionary<Guid, T>` where TKey should bind Guid but codeconv drops type args")]
-    public async Task DictionaryExtensionMethodGenericInferenceAsync()
-    {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
-    }
+    // TDD marker `DictionaryExtensionMethodGenericInferenceAsync` (CS1503
+    // `TKey` -> `Guid`, 10 sites) RESOLVED: those errors were a cascade from
+    // the composite group-by key ignoring explicit VB key names — covered by
+    // CompositeGroupByKeyHonoursExplicitKeyNamesAsync.
 
     [Fact]
     public async Task ImplicitSelectProjectsAllRangeVariablesAsync()
