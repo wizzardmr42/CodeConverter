@@ -1429,6 +1429,33 @@ public static partial class M
 }");
     }
 
+    [Fact]
+    public async Task CompoundAssignDecimalPlusDoubleAsync()
+    {
+        // BMCore CourierServiceBandZone: `price += rprice` where price is
+        // Decimal and rprice is Double. VB widens price to Double, adds, then
+        // narrows back. The compound-split path emitted
+        // `price = (decimal)(price + rprice)` — outer cast right, but
+        // `decimal + double` has no C# operator (CS0019 x14). The lhs operand
+        // inside the split needs the same promotion as the standalone binary
+        // case: `price = (decimal)((double)price + rprice)`.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Module M
+    Public Function Calc(price As Decimal, rprice As Double) As Decimal
+        price += rprice
+        Return price
+    End Function
+End Module",
+            @"
+public static partial class M
+{
+    public static decimal Calc(decimal price, double rprice)
+    {
+        price = (decimal)((double)price + rprice);
+        return price;
+    }
+}");
+    }
+
     [Fact(Skip = "TDD: VB `+=` on custom type where only widening `+` operator is defined (CS0019)")]
     public async Task CompoundAssignOnCustomTypeAsync()
     {
