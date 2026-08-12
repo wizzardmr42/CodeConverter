@@ -1709,10 +1709,36 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0266 `int` → `ushort` (2 sites). Narrowing needs explicit cast")]
+    [Fact]
     public async Task IntToUShortNarrowingAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // BMCore CompetitorFeedback CRC16 pattern. VB widens/narrows implicitly
+        // between UShort and Integer for shift/bitwise ops. C# rejects storing
+        // an int back into a ushort without a cast (CS0266). VB `CUShort(...)`
+        // wrapping IS supposed to become `(ushort)(...)` — probe here shows what
+        // codeconv actually emits.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class C
+    Public Function ComputeChecksum(bytes As Byte()) As UShort
+        Dim crc As UShort = 0
+        Dim table As UShort() = New UShort(255) {}
+        For i As Integer = 0 To bytes.Length - 1
+            crc = CUShort((crc << 8) Xor table(((crc >> 8) Xor (&HFF And bytes(i)))))
+        Next
+        Return crc
+    End Function
+End Class",
+            @"
+public partial class C
+{
+    public ushort ComputeChecksum(byte[] bytes)
+    {
+        ushort crc = 0;
+        ushort[] table = new ushort[256];
+        for (int i = 0, loopTo = bytes.Length - 1; i <= loopTo; i++)
+            crc = (ushort)((ushort)(crc << 8) ^ table[crc >> 8 ^ 0xFF & bytes[i]]);
+        return crc;
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0266 `IQueryable<T>` → `DbSet<T>` (2 sites). Codeconv preserves .Where() result assigned back to a DbSet-typed variable — need to reassign as IQueryable or peel the .Where")]

@@ -31,7 +31,17 @@ internal class TypeConversionAnalyzer
         VBasic.SyntaxKind.AddExpression,
         VBasic.SyntaxKind.SubtractExpression,
         VBasic.SyntaxKind.MultiplyExpression,
-        VBasic.SyntaxKind.DivideExpression
+        VBasic.SyntaxKind.DivideExpression,
+        // Shift and bitwise ops on small integrals (SByte/Byte/Int16/UInt16)
+        // return the small type in VB but promote to Int32 in C# (no operator
+        // is defined for the small types). The result must be treated as Int32
+        // here or an assignment back to the small type will silently drop the
+        // narrowing cast (CS0266).
+        VBasic.SyntaxKind.LeftShiftExpression,
+        VBasic.SyntaxKind.RightShiftExpression,
+        VBasic.SyntaxKind.ExclusiveOrExpression,
+        VBasic.SyntaxKind.AndExpression,
+        VBasic.SyntaxKind.OrExpression
     };
 
     public TypeConversionAnalyzer(SemanticModel semanticModel, CSharpCompilation csCompilation,
