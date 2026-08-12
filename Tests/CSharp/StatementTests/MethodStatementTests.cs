@@ -604,16 +604,15 @@ public partial class TestWithForEachClass
     public static void Main()
     {
         var x = new List<TestWithForEachClass>();
-        foreach (var y in x)
+        foreach (var currentY in x)
         {
+            var y = currentY;
             y._x = 1;
             Console.Write(y._x);
-            y = (TestWithForEachClass)null;
+            y = null;
         }
     }
-}
-1 target compilation errors:
-CS1656: Cannot assign to 'y' because it is a 'foreach iteration variable'");
+}");
     }
 
     [Fact]
