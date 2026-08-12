@@ -1587,6 +1587,96 @@ public static partial class M
     }
 
     [Fact]
+    public async Task ChainedTransparentSelectsQualifyFinalProjectionAsync()
+    {
+        // BMCore GetUnitDataFromPO: chained `Select pold.PurchaseOrderLine,
+        // pold` then `Select pold, PurchaseOrderLine, PurchaseOrderLine.StockItem`
+        // then a final projection. The second Select has two bare vars so it
+        // becomes a real anon select ending the segment; the final
+        // projection's bare `PurchaseOrderLine` then resolved to the TYPE
+        // name (CS0120 x7) and `StockItem`/`pold` to nothing. The
+        // anon-member qualification rewrite must qualify all of them.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Item
+    Public Property Title As String
+End Class
+
+Public Class PurchaseOrderLine
+    Public Property StockItemID As Integer
+    Public Property StockItem As Item
+End Class
+
+Public Class Pold
+    Public Property Occured As Date
+    Public Property PurchaseOrderLine As PurchaseOrderLine
+End Class
+
+Public Class PODelivery
+    Public Property Occurred As Date
+    Public Property StockItemID As Integer
+    Public Property ItemTitle As String
+End Class
+
+Public Module M
+    Public Function Do1(deliveries As List(Of Pold)) As List(Of PODelivery)
+        Return (From pold In deliveries
+                Select pold.PurchaseOrderLine, pold
+                Select pold, PurchaseOrderLine, PurchaseOrderLine.StockItem
+                Select New PODelivery With {
+                    .Occurred = pold.Occured,
+                    .StockItemID = PurchaseOrderLine.StockItemID,
+                    .ItemTitle = StockItem.Title}).ToList()
+    End Function
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Item
+{
+    public string Title { get; set; }
+}
+
+public partial class PurchaseOrderLine
+{
+    public int StockItemID { get; set; }
+    public Item StockItem { get; set; }
+}
+
+public partial class Pold
+{
+    public DateTime Occured { get; set; }
+    public PurchaseOrderLine PurchaseOrderLine { get; set; }
+}
+
+public partial class PODelivery
+{
+    public DateTime Occurred { get; set; }
+    public int StockItemID { get; set; }
+    public string ItemTitle { get; set; }
+}
+
+public static partial class M
+{
+    public static List<PODelivery> Do1(List<Pold> deliveries)
+    {
+        return (from pold in
+                    from pold in deliveries
+                    let PurchaseOrderLine = pold.PurchaseOrderLine
+                    select new { pold, PurchaseOrderLine, PurchaseOrderLine.StockItem }
+                select new PODelivery()
+                {
+                    Occurred = pold.pold.Occured,
+                    StockItemID = pold.PurchaseOrderLine.StockItemID,
+                    ItemTitle = pold.StockItem.Title
+                }).ToList();
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
