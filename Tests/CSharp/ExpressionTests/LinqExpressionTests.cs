@@ -1820,6 +1820,49 @@ public static partial class M
     }
 
     [Fact]
+    public async Task CoalesceOfLiftedComparisonToFalseInExpressionTreeAsync()
+    {
+        // BMCore PurchaseOrderLine.HasChildrenExpression:
+        // `Function(pol) If(pol.ChildrenQuantity > 0, False)` — VB's lifted
+        // `>` on a nullable returns Boolean? (null when null), coalesced to
+        // False. In expression-tree context the C# lifted comparison already
+        // returns plain bool with the same null -> false semantics, so the
+        // emitted `bool ?? false` was CS0019. Emit the bare comparison.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Linq.Expressions
+
+Public Class Pol
+    Public Property ChildrenQuantity As Integer?
+End Class
+
+Public Module M
+    Public ReadOnly Property HasChildrenExpression As Expression(Of Func(Of Pol, Boolean))
+        Get
+            Return Function(pol) If(pol.ChildrenQuantity > 0, False)
+        End Get
+    End Property
+End Module",
+            @"using System;
+using System.Linq.Expressions;
+
+public partial class Pol
+{
+    public int? ChildrenQuantity { get; set; }
+}
+
+public static partial class M
+{
+    public static Expression<Func<Pol, bool>> HasChildrenExpression
+    {
+        get
+        {
+            return pol => pol.ChildrenQuantity > 0;
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

@@ -778,6 +778,23 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         var rightType = _semanticModel.GetTypeInfo(node.SecondExpression).Type;
         ExpressionSyntax leftForBinary = node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide);
         ExpressionSyntax rightForBinary = node.SecondExpression.ParenthesizeIfPrecedenceCouldChange(rightSide);
+
+        // `If(x > 0, False)` where x is nullable: VB's lifted comparison
+        // returns Boolean? (null when x is null), coalesced to False. In
+        // query/expression-tree context the pattern transforms are suppressed
+        // and the C# lifted comparison ALREADY returns plain bool with the
+        // same null -> false semantics — `bool ?? false` is CS0019, and the
+        // coalesce is redundant. Emit the bare comparison. Only safe when
+        // the fallback is literal False (null and False coincide).
+        if (TriviaConvertingExpressionVisitor.IsWithinQuery
+            && leftType.IsNullable(out var comparisonUnderlying) && comparisonUnderlying?.SpecialType == SpecialType.System_Boolean
+            && node.FirstExpression.SkipIntoParens() is VBSyntax.BinaryExpressionSyntax vbComparison
+            && vbComparison.Kind() is VBasic.SyntaxKind.GreaterThanExpression or VBasic.SyntaxKind.GreaterThanOrEqualExpression
+                or VBasic.SyntaxKind.LessThanExpression or VBasic.SyntaxKind.LessThanOrEqualExpression
+                or VBasic.SyntaxKind.EqualsExpression or VBasic.SyntaxKind.NotEqualsExpression
+            && node.SecondExpression.SkipIntoParens().IsKind(VBasic.SyntaxKind.FalseLiteralExpression)) {
+            return leftSide;
+        }
         if (leftType != null && leftType.IsNullable(out var leftUnderlying) && leftUnderlying != null) {
             bool rhsIsString = rightType?.SpecialType == SpecialType.System_String;
             bool underlyingIsString = leftUnderlying.SpecialType == SpecialType.System_String;
