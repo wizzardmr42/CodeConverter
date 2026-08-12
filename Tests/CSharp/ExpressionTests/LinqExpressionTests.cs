@@ -2017,6 +2017,30 @@ public static partial class M
     }
 
     [Fact]
+    public async Task ParameterizedPropertyWithoutAsClauseGetsObjectReturnAsync()
+    {
+        // BMCore StockCount: `Public Shared ReadOnly Property
+        // IsPendingStatus(Status As StockCountStatus)` — no As clause, so the
+        // property is implicitly Object. The parameterized-property-to-method
+        // conversion emitted a VOID getter with a `return expr` (CS0127).
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class C
+    Public Shared ReadOnly Property IsPending(status As Integer)
+        Get
+            Return status > 0
+        End Get
+    End Property
+End Class",
+            @"
+public partial class C
+{
+    public static object get_IsPending(int status)
+    {
+        return status > 0;
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

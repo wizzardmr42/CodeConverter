@@ -1003,9 +1003,14 @@ internal class DeclarationNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSh
 
         string potentialMethodId;
         var sourceMap = ancestoryPropertyBlock?.Accessors.FirstOrDefault() == node ? SourceTriviaMapKind.All : SourceTriviaMapKind.None;
+        // A property with no As clause is implicitly Object — a Get accessor
+        // converted to a method must not fall back to void (its `return expr`
+        // would be CS0127). Setters keep void.
         var returnType = containingPropertyStmt?.AsClause is VBSyntax.SimpleAsClauseSyntax asClause ?
             await asClause.Type.AcceptAsync<TypeSyntax>(_triviaConvertingExpressionVisitor, sourceMap) :
-            SyntaxFactory.PredefinedType(SyntaxFactory.Token(CSSyntaxKind.VoidKeyword));
+            node.IsKind(VBasic.SyntaxKind.GetAccessorBlock) && declaredPropSymbol is IPropertySymbol { Type: { TypeKind: not TypeKind.Error } propType }
+                ? CommonConversions.GetTypeSyntax(propType)
+                : SyntaxFactory.PredefinedType(SyntaxFactory.Token(CSSyntaxKind.VoidKeyword));
 
         switch (node.Kind()) {
             case VBasic.SyntaxKind.GetAccessorBlock:
