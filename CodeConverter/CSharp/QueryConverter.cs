@@ -697,6 +697,20 @@ internal class QueryConverter
                     LiteralConversions.GetLiteralExpression(false));
             }
         }
+        // VB `Where t.Role And Server.Role` — bitwise AND on flag-enums;
+        // VB accepts the enum result in Where (non-zero = true, zero =
+        // false). C# `where` requires `bool` (CS0029). Emit `!= 0` on the
+        // enum expression, cast to the underlying type to satisfy `0`
+        // literal comparison.
+        var whereType = _semanticModel.GetTypeInfo(ws.Condition).Type;
+        if (whereType?.TypeKind == TypeKind.Enum) {
+            var underlyingEnumType = ((INamedTypeSymbol)whereType).EnumUnderlyingType;
+            var typeName = (CSSyntax.TypeSyntax)CommonConversions.CsSyntaxGenerator.TypeExpression(underlyingEnumType);
+            condition = SyntaxFactory.BinaryExpression(
+                SyntaxKind.NotEqualsExpression,
+                ValidSyntaxFactory.CastExpression(typeName, condition.AddParens()),
+                LiteralConversions.GetLiteralExpression(0));
+        }
         return SyntaxFactory.WhereClause(condition);
     }
 

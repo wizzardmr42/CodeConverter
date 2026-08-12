@@ -1820,10 +1820,64 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS0029 enum → bool (HeartBeat) — same shape as above but enum. VB permits `If someEnum Then ...` if enum has None=0; C# needs `!= 0`")]
-    public async Task EnumToBoolInBooleanContextAsync()
+    [Fact]
+    public async Task WhereClauseEnumBitwiseUnwrapsWithZeroCheckAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `Where t.Role And Server.Role` (bitwise `And` on flag-enums)
+        // returns an enum. VB accepts enum in Where via non-zero-is-true
+        // semantics. C# `where` requires `bool` (CS0029).
+        //
+        // Fix in ConvertWhereClauseAsync: when the condition's inferred type
+        // is an enum, emit `((<underlying>)condition) != 0`. Cast to the
+        // underlying integer type first so the `0` literal comparison
+        // resolves without needing an `(EnumType)0` literal.
+        //
+        // Clears CS0029 enum→bool sites in HeartBeat.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+<System.Flags>
+Public Enum Role
+    None = 0
+    Main = 1
+    Test = 2
+End Enum
+
+Public Class Task
+    Public Property MyRole As Role
+End Class
+
+Public Module M
+    Public Function Do1(tasks As IEnumerable(Of Task), r As Role) As Integer
+        Return (From t In tasks Where t.MyRole And r Select t).Count()
+    End Function
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+[Flags]
+public enum Role
+{
+    None = 0,
+    Main = 1,
+    Test = 2
+}
+
+public partial class Task
+{
+    public Role MyRole { get; set; }
+}
+
+public static partial class M
+{
+    public static int Do1(IEnumerable<Task> tasks, Role r)
+    {
+        return (from t in tasks
+                where (t.MyRole & r) != 0
+                select t).Count();
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0029 Thread[] → ScrapingFakeMachine[] (AmazonScraper). Array covariance/downcast mismatch — VB permits, C# needs explicit cast per element")]
