@@ -1456,6 +1456,49 @@ public static partial class M
 }");
     }
 
+    [Fact]
+    public async Task NullableBoolAndAlsoInsideQueryUsesEqualsTrueAsync()
+    {
+        // BMCore PurchaseOrder.GetTotalCost: `If(pol.Supplier.IsVATable
+        // AndAlso pol.IsVATable, x, 0D)` inside an IQueryable select —
+        // Supplier.IsVATable is Boolean?. The nullable-expressions converter
+        // bails out inside queries (patterns are illegal in expression
+        // trees), leaving `bool? && bool` which C# rejects (CS0019 x7 —
+        // && is never lifted). The expression-tree-safe idiom is `== true`
+        // on each nullable operand: null → false, matching VB's
+        // CBool(three-valued result) in a Boolean context.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Linq
+
+Public Class Pol
+    Public Property SupplierVATable As Boolean?
+    Public Property IsVATable As Boolean
+    Public Property Cost As Decimal
+End Class
+
+Public Module M
+    Public Function Total(pols As IQueryable(Of Pol)) As Decimal
+        Return (From pol In pols Select If(pol.SupplierVATable AndAlso pol.IsVATable, pol.Cost, 0D)).Sum()
+    End Function
+End Module",
+            @"using System.Linq;
+
+public partial class Pol
+{
+    public bool? SupplierVATable { get; set; }
+    public bool IsVATable { get; set; }
+    public decimal Cost { get; set; }
+}
+
+public static partial class M
+{
+    public static decimal Total(IQueryable<Pol> pols)
+    {
+        return (from pol in pols
+                select pol.SupplierVATable == true && pol.IsVATable ? pol.Cost : 0m).Sum();
+    }
+}");
+    }
+
     [Fact(Skip = "TDD: VB `+=` on custom type where only widening `+` operator is defined (CS0019)")]
     public async Task CompoundAssignOnCustomTypeAsync()
     {

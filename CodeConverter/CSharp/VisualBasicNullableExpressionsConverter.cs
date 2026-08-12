@@ -47,8 +47,7 @@ internal class VisualBasicNullableExpressionsConverter
 
     public ExpressionSyntax WithBinaryExpressionLogicForNullableTypes(VBSyntax.BinaryExpressionSyntax vbNode, TypeInfo lhsTypeInfo, TypeInfo rhsTypeInfo, BinaryExpressionSyntax csBinExp, ExpressionSyntax lhs, ExpressionSyntax rhs)
     {
-        if (IsWithinQuery ||
-            !IsSupported(vbNode.Kind()) || 
+        if (!IsSupported(vbNode.Kind()) ||
             !lhsTypeInfo.ConvertedType.IsNullable() ||
             !rhsTypeInfo.ConvertedType.IsNullable()) {
             return csBinExp;
@@ -56,6 +55,26 @@ internal class VisualBasicNullableExpressionsConverter
         var isLhsNullable = IsNullable(vbNode.Left, lhs, lhsTypeInfo);
         var isRhsNullable = IsNullable(vbNode.Right, rhs, rhsTypeInfo);
         if (!isLhsNullable && !isRhsNullable) return csBinExp.WithAdditionalAnnotations(IsNotNullableAnnotation);
+
+        if (IsWithinQuery) {
+            // Pattern-based null handling is illegal inside expression trees.
+            // For AndAlso/OrElse on nullable bools, `&&`/`||` are never lifted
+            // in C# (CS0019), so wrap each nullable operand with `== true` —
+            // null becomes false, which matches CBool(three-valued result) in
+            // the Boolean contexts queries consume these in. Relational
+            // operators lift natively in C#, so they pass through untouched.
+            if (vbNode.IsKind(VBasic.SyntaxKind.AndAlsoExpression) || vbNode.IsKind(VBasic.SyntaxKind.OrElseExpression)) {
+                var trueLiteral = SyntaxFactory.LiteralExpression(SyntaxKind.TrueLiteralExpression);
+                var queryLhs = isLhsNullable
+                    ? SyntaxFactory.BinaryExpression(SyntaxKind.EqualsExpression, lhs.AddParens(), trueLiteral)
+                    : lhs;
+                var queryRhs = isRhsNullable
+                    ? SyntaxFactory.BinaryExpression(SyntaxKind.EqualsExpression, rhs.AddParens(), trueLiteral)
+                    : rhs;
+                return csBinExp.WithLeft(queryLhs).WithRight(queryRhs).WithAdditionalAnnotations(IsNotNullableAnnotation);
+            }
+            return csBinExp;
+        }
 
         return WithBinaryExpressionLogicForNullableTypes(vbNode, csBinExp, lhs, rhs, isLhsNullable, isRhsNullable);
     }
