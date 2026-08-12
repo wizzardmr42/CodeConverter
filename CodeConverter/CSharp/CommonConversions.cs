@@ -123,6 +123,12 @@ internal class CommonConversions
     private ITypeSymbol WidenTypeForReassignments(ILocalSymbol local, ITypeSymbol declaredType, VariableDeclaratorSyntax declarator)
     {
         if (local == null || declaredType == null) return declaredType;
+        // Only widen INFERRED declarations (`Dim q = ...`) where VB's
+        // inference picked an over-narrow type. An explicit `Dim x As T`
+        // means assignments convert TO that type — the assignment-site cast
+        // handles those (e.g. `Dim a As RouteAlgorithm() : a = Enum.GetValues(...)`
+        // must stay RouteAlgorithm[] with a cast, not widen to Array).
+        if (declarator.AsClause != null) return declaredType;
         VBasic.VisualBasicSyntaxNode scope = declarator.FirstAncestorOrSelf<VBSyntax.MethodBlockSyntax>()
             ?? (VBasic.VisualBasicSyntaxNode)declarator.FirstAncestorOrSelf<VBSyntax.MultiLineLambdaExpressionSyntax>()
             ?? declarator.FirstAncestorOrSelf<VBSyntax.PropertyBlockSyntax>();
