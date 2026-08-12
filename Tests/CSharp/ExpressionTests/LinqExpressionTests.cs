@@ -1412,6 +1412,76 @@ public static partial class M
     }
 
     [Fact]
+    public async Task CompositeGroupByKeyHonoursExplicitKeyNamesAsync()
+    {
+        // BMCore GetLinnworksStockLevelsTask: `Group By LocationGuid =
+        // sl.Location.LinnworksGUID, ItemGuid = sl.StockItem.Guid Into ...`
+        // — explicit key names. The group-key anon type derived its member
+        // names from the EXPRESSIONS (`LinnworksGUID`, `Guid`) while the
+        // projection referenced the explicit names (`Key.LocationGuid`,
+        // `Key.ItemGuid`) — CS1061 on the key + a cascade of CS0411/CS1503
+        // ('TKey' to 'Guid') at every downstream use.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Loc
+    Public Property LinnworksGUID As System.Guid
+End Class
+
+Public Class Item
+    Public Property Guid As System.Guid
+End Class
+
+Public Class Sl
+    Public Property Location As Loc
+    Public Property StockItem As Item
+    Public Property Level As Integer
+End Class
+
+Public Module M
+    Public Sub Do1(sls As List(Of Sl))
+        Dim CurrentLevels = (From sl In sls
+                             Group By LocationGuid = sl.Location.LinnworksGUID, ItemGuid = sl.StockItem.Guid Into Level = Sum(sl.Level)).ToList
+        For Each cl In CurrentLevels
+            System.Console.WriteLine($""{cl.ItemGuid} {cl.LocationGuid} {cl.Level}"")
+        Next
+    End Sub
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Loc
+{
+    public Guid LinnworksGUID { get; set; }
+}
+
+public partial class Item
+{
+    public Guid Guid { get; set; }
+}
+
+public partial class Sl
+{
+    public Loc Location { get; set; }
+    public Item StockItem { get; set; }
+    public int Level { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(List<Sl> sls)
+    {
+        var CurrentLevels = (from sl in sls
+                             group sl by new { LocationGuid = sl.Location.LinnworksGUID, ItemGuid = sl.StockItem.Guid } into Group
+                             select new { Group.Key.LocationGuid, Group.Key.ItemGuid, Level = Group.Sum(sl => sl.Level) }).ToList();
+        foreach (var cl in CurrentLevels)
+            Console.WriteLine($""{cl.ItemGuid} {cl.LocationGuid} {cl.Level}"");
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

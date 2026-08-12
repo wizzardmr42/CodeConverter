@@ -742,18 +742,21 @@ internal class QueryConverter
 
     private async Task<CSSyntax.ExpressionSyntax> GetGroupExpressionAsync(VBSyntax.GroupByClauseSyntax gs)
     {
-        var groupExpressions = (await gs.Keys.SelectAsync(async k => (vb: k.Expression, cs: await k.Expression.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor)))).ToList();
+        var groupExpressions = (await gs.Keys.SelectAsync(async k => (name: k.NameEquals?.Identifier.Identifier.Text, vb: k.Expression, cs: await k.Expression.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor)))).ToList();
         return (groupExpressions.Count == 1) ? groupExpressions.Single().cs : CreateAnonymousType(groupExpressions);
     }
 
-    private static CSSyntax.ExpressionSyntax CreateAnonymousType(List<(ExpressionSyntax vb, CSSyntax.ExpressionSyntax cs)> groupExpressions)
+    private static CSSyntax.ExpressionSyntax CreateAnonymousType(List<(string name, ExpressionSyntax vb, CSSyntax.ExpressionSyntax cs)> groupExpressions)
     {
         return SyntaxFactory.AnonymousObjectCreationExpression(SyntaxFactory.SeparatedList(groupExpressions.Select(CreateAnonymousMember)));
     }
 
-    private static CSSyntax.AnonymousObjectMemberDeclaratorSyntax CreateAnonymousMember((ExpressionSyntax vb, CSSyntax.ExpressionSyntax cs) expr, int i)
+    private static CSSyntax.AnonymousObjectMemberDeclaratorSyntax CreateAnonymousMember((string name, ExpressionSyntax vb, CSSyntax.ExpressionSyntax cs) expr, int i)
     {
-        var name = SyntaxFactory.Identifier(expr.vb.ExtractAnonymousTypeMemberName()?.Text ?? ("key" + i));
+        // An explicit VB key name (`Group By LocationGuid = sl.Location.LinnworksGUID`)
+        // takes priority — the projection and downstream code reference the key
+        // by that name, not by the trailing member of the expression.
+        var name = SyntaxFactory.Identifier(expr.name ?? expr.vb.ExtractAnonymousTypeMemberName()?.Text ?? ("key" + i));
         return SyntaxFactory.AnonymousObjectMemberDeclarator(SyntaxFactory.NameEquals(ValidSyntaxFactory.IdentifierName(name)), expr.cs);
     }
 
