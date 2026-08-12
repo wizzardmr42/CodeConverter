@@ -1358,6 +1358,60 @@ public partial class ProfitSummary
     }
 
     [Fact]
+    public async Task GroupByIntoAsEnumerableMemberAccessKeepsNoParensAsync()
+    {
+        // BMCore BulkPutAwayUtility: `Group By row.GoodsInID Into AsEnumerable`
+        // creates an anon member `AsEnumerable` (a data member holding the
+        // group). Downstream `g.AsEnumerable` must stay a property access with
+        // NO parens — the CS1929 x14 cluster turned out to be the HARNESS's
+        // Bug 10 regex fixup appending `()` (retired 2026-08-12), but this
+        // regression test pins the correct codeconv emission.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Row
+    Public Property GoodsInID As Integer
+    Public Property PalletID As String
+End Class
+
+Public Module M
+    Public Sub Do1(rows As List(Of Row))
+        Dim groups = (From row In rows Group By row.GoodsInID Into AsEnumerable).ToList
+        For Each g In groups
+            For Each row In g.AsEnumerable
+                System.Console.WriteLine(row.PalletID)
+            Next
+        Next
+    End Sub
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Row
+{
+    public int GoodsInID { get; set; }
+    public string PalletID { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(List<Row> rows)
+    {
+        var groups = (from row in rows
+                      group row by row.GoodsInID into Group
+                      let GoodsInID = Group.Key
+                      select new { GoodsInID = Group.Key, AsEnumerable = Group.AsEnumerable() }).ToList();
+        foreach (var g in groups)
+        {
+            foreach (var row in g.AsEnumerable)
+                Console.WriteLine(row.PalletID);
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
