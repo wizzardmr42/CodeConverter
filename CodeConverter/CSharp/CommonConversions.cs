@@ -82,6 +82,7 @@ internal class CommonConversions
             var declaredSymbol = SemanticModel.GetDeclaredSymbol(name);
             if (symbolsToSkip?.Contains(declaredSymbol, SymbolEqualityComparer.IncludeNullability) == true) continue;
             var declaredSymbolType = declaredSymbol.GetSymbolType();
+            declaredSymbolType = WidenTypeForReassignments(declaredSymbol as ILocalSymbol, declaredSymbolType, declarator);
             var equalsValueClauseSyntax = await ConvertEqualsValueClauseSyntaxAsync(declarator, name, vbInitValue, declaredSymbolType, declaredSymbol, initializerOrMethodDecl);
             var v = SyntaxFactory.VariableDeclarator(ConvertIdentifier(name.Identifier), null, equalsValueClauseSyntax);
             string k = declaredSymbolType?.GetFullMetadataName() ?? name.ToString();//Use likely unique key if the type symbol isn't available
@@ -104,6 +105,45 @@ internal class CommonConversions
         }
 
         return (csVars.Values, csMethods);
+    }
+
+    /// <summary>
+    /// Locals whose declared type was widened by <see cref="WidenTypeForReassignments"/> —
+    /// reassignments to these must not re-narrow with a cast back to the VB-declared type.
+    /// </summary>
+    public HashSet<ILocalSymbol> WidenedReassignedLocals { get; } = new(SymbolEqualityComparer.IncludeNullability);
+
+    /// <summary>
+    /// VB Option Strict Off pattern: `Dim q = Context.PurchaseOrderLines`
+    /// infers q as DbSet&lt;T&gt; from the initializer, then `q = From x In q ...`
+    /// reassigns with IQueryable&lt;T&gt; — VB permits the narrowing at the
+    /// reassignment, C# rejects it (CS0266). Widen the declaration to the
+    /// broadest reassigned type when the declared type derives from it.
+    /// </summary>
+    private ITypeSymbol WidenTypeForReassignments(ILocalSymbol local, ITypeSymbol declaredType, VariableDeclaratorSyntax declarator)
+    {
+        if (local == null || declaredType == null) return declaredType;
+        VBasic.VisualBasicSyntaxNode scope = declarator.FirstAncestorOrSelf<VBSyntax.MethodBlockSyntax>()
+            ?? (VBasic.VisualBasicSyntaxNode)declarator.FirstAncestorOrSelf<VBSyntax.MultiLineLambdaExpressionSyntax>()
+            ?? declarator.FirstAncestorOrSelf<VBSyntax.PropertyBlockSyntax>();
+        if (scope == null) return declaredType;
+        var widest = declaredType;
+        foreach (var assign in scope.DescendantNodes().OfType<VBSyntax.AssignmentStatementSyntax>()) {
+            if (!assign.IsKind(SyntaxKind.SimpleAssignmentStatement)) continue;
+            if (SemanticModel.GetSymbolInfo(assign.Left).Symbol is not ILocalSymbol assignedSymbol) continue;
+            if (!SymbolEqualityComparer.IncludeNullability.Equals(assignedSymbol, local)) continue;
+            var rhsType = SemanticModel.GetTypeInfo(assign.Right).Type;
+            if (rhsType == null || rhsType.TypeKind == TypeKind.Error) continue;
+            if (!SymbolEqualityComparer.Default.Equals(rhsType, widest)
+                && widest.InheritsFromOrImplementsOrEqualsIgnoringConstruction(rhsType)
+                && rhsType.SpecialType != SpecialType.System_Object) {
+                widest = rhsType;
+            }
+        }
+        if (!SymbolEqualityComparer.Default.Equals(widest, declaredType)) {
+            WidenedReassignedLocals.Add(local);
+        }
+        return widest;
     }
 
     public bool ShouldPreferExplicitType(VBSyntax.ExpressionSyntax exp,

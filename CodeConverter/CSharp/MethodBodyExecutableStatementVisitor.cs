@@ -284,8 +284,15 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
             
         var lhsTypeInfo = _semanticModel.GetTypeInfo(node.Left);
         var rhsTypeInfo = _semanticModel.GetTypeInfo(node.Right);
-            
-        var typeConvertedRhs = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Right, rhs);
+
+        // A local widened by WidenTypeForReassignments must not re-narrow at
+        // its reassignments — the VB semantic model still reports the old
+        // narrow declared type as the conversion target, but the C#
+        // declaration now IS the broad type, so no conversion is needed.
+        bool lhsIsWidenedLocal = _semanticModel.GetSymbolInfo(node.Left).Symbol is ILocalSymbol lhsLocal
+                                 && CommonConversions.WidenedReassignedLocals.Contains(lhsLocal);
+
+        var typeConvertedRhs = lhsIsWidenedLocal ? rhs : CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Right, rhs);
 
         // Split out compound operator if type conversion needed on result
         if (TypeConversionAnalyzer.GetNonCompoundOrNull(kind) is {} nonCompound) {

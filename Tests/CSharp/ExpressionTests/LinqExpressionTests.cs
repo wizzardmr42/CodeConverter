@@ -2472,10 +2472,83 @@ public partial class C
 }");
     }
 
-    [Fact(Skip = "TDD: CS0266 `IQueryable<T>` → `DbSet<T>` (2 sites). Codeconv preserves .Where() result assigned back to a DbSet-typed variable — need to reassign as IQueryable or peel the .Where")]
+    [Fact]
     public async Task QueryableAssignedBackToDbSetAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // BMCore AddPOLinesToLinnworksTask: `Dim q = Context.PurchaseOrderLines`
+        // infers q as DbSet<T> from the initializer; later `q = From x In q
+        // ...` reassigns with IQueryable<T> — VB permits the narrowing at
+        // reassignment, C# rejects (CS0266 x2, + the IOrderedQueryable ->
+        // IQueryable variant in SetOrderPackagingGroupsInLinnworks). Widen
+        // the declaration to the broadest reassigned type, and don't
+        // re-narrow at the reassignment.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Row
+    Public Property ID As Integer
+End Class
+
+Public Class Bag(Of T)
+    Implements IEnumerable(Of T)
+    Public Function GetEnumerator() As IEnumerator(Of T) Implements IEnumerable(Of T).GetEnumerator
+        Return Nothing
+    End Function
+    Public Function GetEnumeratorObj() As System.Collections.IEnumerator Implements System.Collections.IEnumerable.GetEnumerator
+        Return Nothing
+    End Function
+End Class
+
+Public Class Ctx
+    Public Property Rows As Bag(Of Row)
+End Class
+
+Public Module M
+    Public Sub Do1(ctx As Ctx)
+        Dim q = ctx.Rows
+        q = From r In q Where r.ID > 0 Select r
+        Dim a = q.ToArray()
+    End Sub
+End Module",
+            @"using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Row
+{
+    public int ID { get; set; }
+}
+
+public partial class Bag<T> : IEnumerable<T>
+{
+    public IEnumerator<T> GetEnumerator()
+    {
+        return null;
+    }
+    public IEnumerator GetEnumeratorObj()
+    {
+        return null;
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumeratorObj();
+}
+
+public partial class Ctx
+{
+    public Bag<Row> Rows { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(Ctx ctx)
+    {
+        IEnumerable<Row> q = ctx.Rows;
+        q = from r in q
+            where r.ID > 0
+            select r;
+        Row[] a = q.ToArray();
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS1662 remaining lambda-return sites (15). Non-Where/Any predicates that still emit bool? bodies for a bool delegate — likely OrderBy/GroupBy key selectors and similar")]
