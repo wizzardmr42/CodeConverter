@@ -2150,4 +2150,78 @@ public static partial class M
     {
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
+
+    [Fact]
+    public async Task TransparentSelectSkipsWhenDownstreamUsesSelfMemberAsync()
+    {
+        // Prevents a regression from the transparent-Select fix: VB
+        // `Select oa, oa.Order, Weight = ...` creates an anon type with
+        // `oa` AS A MEMBER (the OrderAction). Downstream code may access
+        // `oa.oa` (VB transparent-identifier reference to the OrderAction
+        // sub-member). If we let-emit and preserve `oa` as the OrderAction
+        // range variable directly, `oa.oa` no longer resolves — CS1061.
+        //
+        // Fix skips the transform when the enclosing method contains any
+        // `<bareName>.<bareName>` member access. Fall back to the default
+        // anon-type projection which preserves both the range-var-as-member
+        // shape and the outer scope's ability to access `.<name>`.
+        //
+        // Regression source: BMCore/Server/SetOrderPostalServicesInLinnworks.cs
+        // (7 CS1061 sites), SetOrderPackagingGroupsInLinnworks (similar),
+        // and a handful of other OrderActions sites.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Order
+    Public Property ID As Integer
+End Class
+
+Public Class OrderAction
+    Public Property Order As Order
+    Public Property Done As System.DateTime?
+End Class
+
+Public Module M
+    Public Function Do1(actions As IEnumerable(Of OrderAction)) As Integer
+        Dim oas = (From oa In actions
+                   Where oa.Order IsNot Nothing
+                   Select oa, oa.Order, Weight = 1).ToList
+        Dim r = oas.Where(Function(oa)
+                              oa.oa.Done = System.DateTime.Now
+                              Return True
+                          End Function).ToList
+        Return r.Count
+    End Function
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Order
+{
+    public int ID { get; set; }
+}
+
+public partial class OrderAction
+{
+    public Order Order { get; set; }
+    public DateTime? Done { get; set; }
+}
+
+public static partial class M
+{
+    public static int Do1(IEnumerable<OrderAction> actions)
+    {
+        var oas = (from oa in actions
+                   where oa.Order != null
+                   select new { oa, oa.Order, Weight = 1 }).ToList();
+        var r = oas.Where(oa =>
+        {
+            oa.oa.Done = DateTime.Now;
+            return true;
+        }).ToList();
+        return r.Count;
+    }
+}");
+    }
 }

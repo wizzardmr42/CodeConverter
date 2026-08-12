@@ -388,10 +388,12 @@ internal class QueryConverter
         if (clausesAfter == 0) return false;
         if (sc.Variables.Count < 2) return false;
         int bareCount = 0;
+        string bareName = null;
         foreach (var v in sc.Variables) {
             bool isBareIdentifier = v.NameEquals == null && v.Expression is VBSyntax.IdentifierNameSyntax;
             if (isBareIdentifier) {
                 bareCount++;
+                bareName = ((VBSyntax.IdentifierNameSyntax)v.Expression).Identifier.ValueText;
                 continue;
             }
             // Non-bare vars need a name we can lift into a `let`.
@@ -399,7 +401,33 @@ internal class QueryConverter
         }
         // Exactly one bare identifier (the presumed range variable) —
         // otherwise we can't tell which is the range var to preserve.
-        return bareCount == 1;
+        if (bareCount != 1 || bareName == null) return false;
+
+        // Downstream-safety check: VB `Select oa, oa.Order, Weight = ...`
+        // creates an anon type with `oa` AS A MEMBER; downstream code may
+        // access `oa.oa` (VB transparent-identifier reference to the
+        // OrderAction sub-member). If we let-emit and preserve `oa` as the
+        // OrderAction range variable directly, `oa.oa` no longer resolves
+        // (CS1061 "does not contain a definition for 'oa'").
+        //
+        // Skip the transform when the ENCLOSING method contains any
+        // `<bareName>.<bareName>` pattern — that's a strong signal downstream
+        // code depends on the anon-type projection shape.
+        VBasic.VisualBasicSyntaxNode enclosing = sc.FirstAncestorOrSelf<VBSyntax.MethodBlockSyntax>();
+        enclosing ??= sc.FirstAncestorOrSelf<VBSyntax.MultiLineLambdaExpressionSyntax>();
+        enclosing ??= sc.FirstAncestorOrSelf<VBSyntax.SingleLineLambdaExpressionSyntax>();
+        enclosing ??= sc.FirstAncestorOrSelf<VBSyntax.PropertyBlockSyntax>();
+        if (enclosing != null) {
+            foreach (var maes in enclosing.DescendantNodes().OfType<VBSyntax.MemberAccessExpressionSyntax>()) {
+                if (maes.Expression is VBSyntax.IdentifierNameSyntax exprId
+                    && exprId.Identifier.ValueText == bareName
+                    && maes.Name is VBSyntax.IdentifierNameSyntax nameId
+                    && nameId.Identifier.ValueText == bareName) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private async Task<IEnumerable<CSSyntax.FromClauseSyntax>> ConvertFromClauseSyntaxAsync(VBSyntax.FromClauseSyntax vbFromClause) => await vbFromClause.Variables.SelectAsync(ConvertFromClauseVariableAsync);
