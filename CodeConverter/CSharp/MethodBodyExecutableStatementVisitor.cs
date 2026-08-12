@@ -294,6 +294,21 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
 
         var typeConvertedRhs = lhsIsWidenedLocal ? rhs : CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Right, rhs);
 
+        // VB compound assignment on an Object-typed lhs is late-bound
+        // (`NumberofTries += 1` where the field is `Dim NumberofTries = 0`,
+        // i.e. Object without Option Infer). C# has no object arithmetic —
+        // route through the same Microsoft.VisualBasic Operators helpers the
+        // binary-operator substitution uses.
+        if (lhsTypeInfo.Type?.SpecialType == SpecialType.System_Object
+            && LateBoundCompoundOperatorName(node.Kind()) is { } lateBoundOp) {
+            _extraUsingDirectives.Add("Microsoft.VisualBasic.CompilerServices");
+            var lateBoundCall = SyntaxFactory.InvocationExpression(
+                ValidSyntaxFactory.MemberAccess("Operators", lateBoundOp),
+                ExpressionSyntaxExtensions.CreateArgList(lhs, rhs));
+            var lateBoundAssignment = SyntaxFactory.AssignmentExpression(SyntaxKind.SimpleAssignmentExpression, lhs, lateBoundCall);
+            return GetPostAssignmentStatements(node).Insert(0, SyntaxFactory.ExpressionStatement(lateBoundAssignment));
+        }
+
         // Split out compound operator if type conversion needed on result
         if (TypeConversionAnalyzer.GetNonCompoundOrNull(kind) is {} nonCompound) {
 
@@ -330,6 +345,16 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         var postAssignment = GetPostAssignmentStatements(node);
         return postAssignment.Insert(0, SyntaxFactory.ExpressionStatement(assignment));
     }
+
+    private static string LateBoundCompoundOperatorName(VBasic.SyntaxKind assignmentKind) => assignmentKind switch {
+        VBasic.SyntaxKind.AddAssignmentStatement => "AddObject",
+        VBasic.SyntaxKind.SubtractAssignmentStatement => "SubtractObject",
+        VBasic.SyntaxKind.MultiplyAssignmentStatement => "MultiplyObject",
+        VBasic.SyntaxKind.DivideAssignmentStatement => "DivideObject",
+        VBasic.SyntaxKind.ConcatenateAssignmentStatement => "ConcatenateObject",
+        VBasic.SyntaxKind.IntegerDivideAssignmentStatement => "IntDivideObject",
+        _ => null
+    };
 
     private async Task<SyntaxList<StatementSyntax>> ConvertMidAssignmentAsync(VBSyntax.AssignmentStatementSyntax node, VBSyntax.MidExpressionSyntax mes)
     {

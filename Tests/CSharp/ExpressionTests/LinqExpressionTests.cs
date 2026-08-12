@@ -1863,6 +1863,31 @@ public static partial class M
     }
 
     [Fact]
+    public async Task CompoundAssignmentOnObjectFieldIsLateBoundAsync()
+    {
+        // BMCore PurchaseOrder: class-level `Dim NumberofTries = 0` is an
+        // Object field (fields don't infer). `NumberofTries += 1` is
+        // late-bound in VB; C# has no object arithmetic (CS0019 x2). Route
+        // through Operators.AddObject like the binary-operator substitution.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class C
+    Dim NumberofTries = 0
+    Public Sub Bump()
+        NumberofTries += 1
+    End Sub
+End Class",
+            @"using Microsoft.VisualBasic.CompilerServices; // Install-Package Microsoft.VisualBasic
+
+public partial class C
+{
+    private object NumberofTries = 0;
+    public void Bump()
+    {
+        NumberofTries = Operators.AddObject(NumberofTries, 1);
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
