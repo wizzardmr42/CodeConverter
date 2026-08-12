@@ -2013,7 +2013,7 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS0411 `TryGetIEnumerableOrEmpty<TKey,TElem>` inference (5 sites). Generic extension method type-arg inference fails after receiver simplification — need explicit type args")]
+    [Fact(Skip = "TDD: CS0411 `TryGetIEnumerableOrEmpty<TKey,TElem>` inference (5 sites). Simple probe with dict + query works — the actual failing shape has a more complex receiver (probably chained through GroupIntoDictionary / an anon-typed source). Need to construct a repro from the actual emission")]
     public async Task GenericExtensionMethodTypeArgsExplicitAsync()
     {
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
@@ -2205,10 +2205,41 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0236 field initializer references non-static member (2 sites, LBoardConfig). Move the initialization to constructor")]
+    [Fact]
     public async Task FieldInitializerReferencingInstanceMemberAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // BMCore LBoardConfig has `Public Property Mins As Integer = MsProp / 60000`
+        // where MsProp is a computed instance property. VB runs property
+        // initializers inside the constructor so this is fine. C# property
+        // initializers are static-only (CS0236). Fix: hoist the initializer
+        // into an instance ctor assignment and drop the `= expr` on the
+        // auto-property declaration.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class LBoardConfig
+    Public ReadOnly Property RefreshTimeMS As Integer
+        Get
+            Return RefreshTimeMins * 60000
+        End Get
+    End Property
+    Public Property RefreshTimeMins As Integer = RefreshTimeMS / 60000
+End Class",
+            @"using System;
+
+public partial class LBoardConfig
+{
+    public int RefreshTimeMS
+    {
+        get
+        {
+            return RefreshTimeMins * 60000;
+        }
+    }
+    public int RefreshTimeMins { get; set; }
+
+    public LBoardConfig()
+    {
+        RefreshTimeMins = (int)Math.Round(RefreshTimeMS / 60000d);
+    }
+}");
     }
 
     [Fact]

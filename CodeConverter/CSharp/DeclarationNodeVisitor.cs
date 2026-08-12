@@ -768,6 +768,27 @@ internal class DeclarationNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSh
             _additionalDeclarations.Add(declNode, additionalDeclarations.ToArray());
         }
 
+        // Auto-property initializer that references instance members is
+        // legal in VB (initializers run in the constructor) but illegal in
+        // C# (property initializers are static-only, CS0236). Hoist into an
+        // instance-constructor assignment and drop the initializer. Apply
+        // the property's target-type conversion so any implicit narrowing
+        // (e.g. VB `/` returning Double being stored in an Integer) is made
+        // explicit — an initializer on the property itself is emitted with
+        // the target type visible; a constructor assignment isn't.
+        if (initializer != null && node.Parent is not VBSyntax.PropertyBlockSyntax
+            && propSymbol is { IsStatic: false }
+            && node.Initializer?.Value is { } vbInitValue
+            && !_semanticModel.IsDefinitelyStatic(vbInitValue)
+            && !_typeContext.Initializers.HasInstanceConstructorsOutsideThisPart) {
+            var lhs = SyntaxFactory.IdentifierName(directlyConvertedCsIdentifier);
+            var rhs = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+                vbInitValue, initializer.Value, forceTargetType: propSymbol.Type);
+            _typeContext.Initializers.AdditionalInstanceInitializers.Add(
+                new Assignment(lhs, CSSyntaxKind.SimpleAssignmentExpression, rhs.WithoutSourceMapping()));
+            initializer = null;
+        }
+
         var semicolonToken = SyntaxFactory.Token(initializer == null ? CSSyntaxKind.None : CSSyntaxKind.SemicolonToken);
         return SyntaxFactory.PropertyDeclaration(
             attributes,
