@@ -246,6 +246,24 @@ internal class QueryConverter
                                 ValidSyntaxFactory.IdentifierName(groupIdentifierForLet),
                                 ValidSyntaxFactory.IdentifierName("Key")));
                         continuationClauses = continuationClauses.Add(letGroupKey);
+                    } else if (groupKeyIds.Count > 1) {
+                        // Composite key `Group By oipi.StockItem, oipi.WarehouseLocation`
+                        // — the C# Key is an anonymous type. Downstream code references
+                        // bare `StockItem` / `WarehouseLocation` (VB transparent
+                        // identifier), but C# needs `@group.Key.StockItem` etc.
+                        // Emit `let StockItem = @group.Key.StockItem` for each
+                        // implicitly-named key so bare references resolve.
+                        // Without this, downstream `select new X(StockItem, ...)`
+                        // treats `StockItem` as a type name → CS0119.
+                        foreach (var keyName in groupKeyIds) {
+                            var letCompositeKey = SyntaxFactory.LetClause(keyName,
+                                SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                    SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                        ValidSyntaxFactory.IdentifierName(groupIdentifierForLet),
+                                        ValidSyntaxFactory.IdentifierName("Key")),
+                                    ValidSyntaxFactory.IdentifierName(keyName)));
+                            continuationClauses = continuationClauses.Add(letCompositeKey);
+                        }
                     }
                     // Also add lets for aggregation variables so `Select <aggName>`
                     // works. Sources of the aggregation NAME:
@@ -263,14 +281,37 @@ internal class QueryConverter
                             && string.Equals(aggName.ValueText, groupIdentifierForLet.ValueText, StringComparison.OrdinalIgnoreCase)) {
                             continue;
                         }
-                        CSSyntax.ExpressionSyntax aggExpr = agg.Aggregation switch {
-                            VBSyntax.GroupAggregationSyntax => ValidSyntaxFactory.IdentifierName(groupIdentifierForLet),
-                            VBSyntax.FunctionAggregationSyntax fa => SyntaxFactory.InvocationExpression(
-                                SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                        CSSyntax.ExpressionSyntax aggExpr;
+                        switch (agg.Aggregation) {
+                            case VBSyntax.GroupAggregationSyntax:
+                                aggExpr = ValidSyntaxFactory.IdentifierName(groupIdentifierForLet);
+                                break;
+                            case VBSyntax.FunctionAggregationSyntax fa: {
+                                var invocationTarget = SyntaxFactory.MemberAccessExpression(
+                                    SyntaxKind.SimpleMemberAccessExpression,
                                     ValidSyntaxFactory.IdentifierName(groupIdentifierForLet),
-                                    ValidSyntaxFactory.IdentifierName(fa.FunctionName.Text))),
-                            _ => ValidSyntaxFactory.IdentifierName(groupIdentifierForLet)
-                        };
+                                    ValidSyntaxFactory.IdentifierName(fa.FunctionName.Text));
+                                if (fa.Argument != null) {
+                                    // VB `Into Total = Sum(x.Qty)` — the aggregation arg
+                                    // is evaluated per group element. Emit `Group.Sum(x =>
+                                    // x.Qty)`. Without the lambda arg, `Group.Sum()` on
+                                    // IGrouping<K, T> where T isn't numeric fires CS1929.
+                                    // Same as CreateGroupByProjectionAsync's arg handling,
+                                    // but here in the let-emission path.
+                                    var argBody = await fa.Argument.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+                                    var lambdaParam = SyntaxFactory.Parameter(reusableCsFromId);
+                                    var lambda = SyntaxFactory.SimpleLambdaExpression(lambdaParam, argBody);
+                                    aggExpr = SyntaxFactory.InvocationExpression(invocationTarget,
+                                        SyntaxFactory.ArgumentList(SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Argument(lambda))));
+                                } else {
+                                    aggExpr = SyntaxFactory.InvocationExpression(invocationTarget);
+                                }
+                                break;
+                            }
+                            default:
+                                aggExpr = ValidSyntaxFactory.IdentifierName(groupIdentifierForLet);
+                                break;
+                        }
                         continuationClauses = continuationClauses.Add(SyntaxFactory.LetClause(aggName.Text, aggExpr));
                     }
                 } else if (groupKeyIds.Count == 1) {

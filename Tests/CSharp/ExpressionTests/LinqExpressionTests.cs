@@ -1808,10 +1808,78 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0120 + CS0119 type-as-member (21 combined sites, GetUnitDataFromPO). Chained VB Select `Select pold.PurchaseOrderLine, pold Select pold, PurchaseOrderLine, PurchaseOrderLine.StockItem` — the second Select re-projects promoted names as if they were the range var. Transparent-Select fix should reach this once let-emission handles the promoted-name chain")]
-    public async Task ChainedTransparentSelectPromotedNameReuseAsync()
+    [Fact]
+    public async Task CompositeGroupByKeyLetBindsEachImplicitNameAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `Group By oipi.StockItem, oipi.WarehouseLocation Into Sum = ...`
+        // — the composite key becomes a C# anonymous type via `@group.Key`.
+        // Downstream code references bare `StockItem` and `WarehouseLocation`
+        // (VB transparent identifier), but C# needs `@group.Key.StockItem`
+        // etc. — bare references treat them as TYPE names, giving CS0119
+        // "'StockItem' is a type, which is not valid in the given context".
+        //
+        // The single-key case was already handled (`let X = @group.Key`).
+        // Extend to composite: emit `let <keyName> = @group.Key.<keyName>`
+        // for each implicitly-named key.
+        //
+        // Clears CS0119 sites in Picking/Wave (`StockItem`, `WarehouseLocation`)
+        // and similar composite-key patterns across BMCore.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class StockItem
+    Public Property ID As Integer
+End Class
+
+Public Class WarehouseLocation
+    Public Property ID As Integer
+End Class
+
+Public Class Item
+    Public Property Stock As StockItem
+    Public Property Location As WarehouseLocation
+    Public Property Qty As Integer
+End Class
+
+Public Module M
+    Public Function Do1(items As IEnumerable(Of Item)) As Integer
+        Return (From x In items
+                Group By x.Stock, x.Location Into Total = Sum(x.Qty)
+                Select New With {Stock, Location, Total}).Count()
+    End Function
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class StockItem
+{
+    public int ID { get; set; }
+}
+
+public partial class WarehouseLocation
+{
+    public int ID { get; set; }
+}
+
+public partial class Item
+{
+    public StockItem Stock { get; set; }
+    public WarehouseLocation Location { get; set; }
+    public int Qty { get; set; }
+}
+
+public static partial class M
+{
+    public static int Do1(IEnumerable<Item> items)
+    {
+        return (from x in items
+                group x by new { x.Stock, x.Location } into Group
+                let Stock = Group.Key.Stock
+                let Location = Group.Key.Location
+                let Total = Group.Sum(x => x.Qty)
+                select new { Stock, Location, Total }).Count();
+    }
+}");
     }
 
     [Fact]
