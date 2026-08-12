@@ -393,6 +393,21 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             return replacement;
         }
 
+        // VB `txcon.<AmazonOrderID>.Value` — `.Value` on an XML-axis result
+        // (IEnumerable(Of XElement)) binds to VB's InternalXmlHelper.Value:
+        // the FIRST element's value, or Nothing when empty. The plain member
+        // access fails in C# (CS1061). Emit `.FirstOrDefault()?.Value`.
+        if (node.Name.Identifier.ValueText.Equals("Value", StringComparison.OrdinalIgnoreCase)
+            && node.Expression != null
+            && IsEnumerableOfXElement(_semanticModel.GetTypeInfo(node.Expression).Type)) {
+            _extraUsingDirectives.Add("System.Linq");
+            var xmlSource = await node.Expression.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
+            var firstOrDefault = SyntaxFactory.InvocationExpression(
+                ValidSyntaxFactory.MemberAccess(xmlSource.AddParens(), nameof(Enumerable.FirstOrDefault)), SyntaxFactory.ArgumentList());
+            return SyntaxFactory.ConditionalAccessExpression(firstOrDefault,
+                SyntaxFactory.MemberBindingExpression(ValidSyntaxFactory.IdentifierName("Value")));
+        }
+
         var simpleNameSyntax = await node.Name.AcceptAsync<SimpleNameSyntax>(TriviaConvertingExpressionVisitor);
 
         var isDefaultProperty = nodeSymbol is IPropertySymbol p && VBasic.VisualBasicExtensions.IsDefault(p);
@@ -2025,6 +2040,14 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     // The correct rule: the node is a sub part ONLY if it's reached via the
     // WhenNotNull side of a `?.` — the LHS/Expression side still needs the With
     // substitution.
+    private static bool IsEnumerableOfXElement(ITypeSymbol type)
+    {
+        if (type == null || type.Name == nameof(System.Xml.Linq.XElement)) return false;
+        return type.GetAllInterfacesIncludingThis().Any(i =>
+            i.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T
+            && i.TypeArguments.Length == 1 && i.TypeArguments[0].Name == nameof(System.Xml.Linq.XElement));
+    }
+
     private static bool IsSubPartOfConditionalAccess(VBasic.Syntax.MemberAccessExpressionSyntax node)
     {
         SyntaxNode child = node;

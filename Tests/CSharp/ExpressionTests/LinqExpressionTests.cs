@@ -1888,6 +1888,35 @@ public partial class C
     }
 
     [Fact]
+    public async Task XmlAxisValueUsesFirstOrDefaultAsync()
+    {
+        // BMCore ChannelSettlement / Order.LinnWorks.NewAPI:
+        // `txcon.<AmazonOrderID>.Value` — `.Value` on an XML-axis result
+        // (IEnumerable(Of XElement)) binds to VB's InternalXmlHelper.Value:
+        // the first element's value or Nothing. The plain `.Value` member
+        // access fails in C# (CS1061 x3).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Xml.Linq
+
+Public Module M
+    Public Function Do1(txcon As XElement) As String
+        Dim ful = txcon.<Fulfillment>
+        Return txcon.<AmazonOrderID>.Value & ful.<MerchantFulfillmentID>.Value
+    End Function
+End Module",
+            @"using System.Linq;
+using System.Xml.Linq;
+
+public static partial class M
+{
+    public static string Do1(XElement txcon)
+    {
+        var ful = txcon.Elements(""Fulfillment"");
+        return txcon.Elements(""AmazonOrderID"").FirstOrDefault()?.Value + ful.Elements(""MerchantFulfillmentID"").FirstOrDefault()?.Value;
+    }
+}", incompatibleWithAutomatedCommentTesting: true);
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
