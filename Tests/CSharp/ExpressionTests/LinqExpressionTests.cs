@@ -1768,6 +1768,58 @@ public static partial class M
     }
 
     [Fact]
+    public async Task SelectRenameReusingSameNameSplitsSegmentAsync()
+    {
+        // BMCore GetLinnworksStockLevelsTask: `From ch In l Select ch =
+        // TryCast(ch, Derived) Where ch IsNot Nothing` — the rename REUSES
+        // the range variable's own name. The let-emission `let ch = ch as
+        // Derived` collides (CS1930 x3: ch/oi/z sites). A real select ends
+        // the segment; the next segment's `from ch in (...)` rebinds cleanly.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class BaseChange
+End Class
+
+Public Class BatchChange
+    Inherits BaseChange
+    Public Property BinRack As String
+End Class
+
+Public Module M
+    Public Function Do1(l As List(Of BaseChange)) As List(Of String)
+        Return (From ch In l
+                Select ch = TryCast(ch, BatchChange)
+                Where ch IsNot Nothing
+                Select ch.BinRack).ToList()
+    End Function
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class BaseChange
+{
+}
+
+public partial class BatchChange : BaseChange
+{
+    public string BinRack { get; set; }
+}
+
+public static partial class M
+{
+    public static List<string> Do1(List<BaseChange> l)
+    {
+        return (from ch in
+                    from ch in l
+                    select ch as BatchChange
+                where ch != null
+                select ch.BinRack).ToList();
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

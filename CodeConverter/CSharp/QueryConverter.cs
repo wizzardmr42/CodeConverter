@@ -213,8 +213,18 @@ internal class QueryConverter
         // (CS0103). Force a real `select` in that case; the rename rebinding
         // in ConvertQuerySegmentsAsync gives downstream clauses the right
         // range variable.
-        return vbBodyClauses.Peek() is VBSyntax.SelectClauseSyntax { Variables.Count: 1 }
-               && vbBodyClauses.Skip(1).Any(RequiresMethodInvocation);
+        if (vbBodyClauses.Peek() is VBSyntax.SelectClauseSyntax { Variables.Count: 1 }
+            && vbBodyClauses.Skip(1).Any(RequiresMethodInvocation)) {
+            return true;
+        }
+        // `Select ch = TryCast(ch, ...)` — a rename that REUSES the range
+        // variable's own name. The let-emission `let ch = ...` collides with
+        // the in-scope `ch` (CS1930); a real select ends the segment and the
+        // next segment's `from ch in (...)` rebinds the name cleanly.
+        return vbBodyClauses.Peek() is VBSyntax.SelectClauseSyntax { Variables.Count: 1 } selfRename
+               && selfRename.Variables[0].NameEquals?.Identifier.Identifier.ValueText is { } assignedName
+               && selfRename.Variables[0].Expression.DescendantNodesAndSelf().OfType<VBSyntax.IdentifierNameSyntax>()
+                   .Any(id => id.Identifier.ValueText.Equals(assignedName, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task<CSharpSyntaxNode> ConvertQuerySegmentsAsync(IEnumerable<(Queue<QuerySection>, VBSyntax.QueryClauseSyntax)> querySegments, SyntaxToken reusableFromCsId, CSSyntax.FromClauseSyntax fromClauseSyntax = null)

@@ -190,7 +190,9 @@ internal class TypeConversionAnalyzer
             paramNames.Select(n => SyntaxFactory.Argument(ValidSyntaxFactory.IdentifierName(n)))));
         ExpressionSyntax body = SyntaxFactory.InvocationExpression(csNode.AddParens(), invokeArgs);
         if (!SymbolEqualityComparer.Default.Equals(srcInvoke.ReturnType, tgtInvoke.ReturnType) && !tgtInvoke.ReturnsVoid) {
-            body = ValidSyntaxFactory.CastExpression(GetTypeSyntax(tgtInvoke.ReturnType), body);
+            // Parenthesize the invocation: `(bool)(matchFunc)(arg)` parses as
+            // a cast chain treating matchFunc as a type name (CS0118).
+            body = ValidSyntaxFactory.CastExpression(GetTypeSyntax(tgtInvoke.ReturnType), SyntaxFactory.ParenthesizedExpression(body));
         }
         if (paramNames.Count == 1) {
             return SyntaxFactory.SimpleLambdaExpression(SyntaxFactory.Parameter(SyntaxFactory.Identifier(paramNames[0])), body);
