@@ -879,8 +879,24 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         var typeInfo = _semanticModel.GetTypeInfo(node);
         if (_semanticModel.GetSymbolInfo(node.Operand).Symbol is IMethodSymbol ms && typeInfo.Type is INamedTypeSymbol nt) {
             if (!ms.CompatibleSignatureToDelegate(nt)) {
-                int count = nt.DelegateInvokeMethod.Parameters.Length;
-                return CommonConversions.ThrowawayParameters(expr, count);
+                int delegateArity = nt.DelegateInvokeMethod.Parameters.Length;
+                int methodArity = ms.Parameters.Length;
+                // When the METHOD has fewer params than the delegate, VB's
+                // `AddressOf` binds the method to the delegate discarding
+                // extra args (typical event handlers: `AddressOf Foo` where
+                // Foo takes no args bound to `EventHandler(object, EventArgs)`).
+                // Emit `(_, __) => method()` — throwaway args.
+                //
+                // When the arities MATCH but signature-check still fails
+                // (typically nullable widening: `AddressOf SetX(decimal?)`
+                // bound to `Action<decimal>`), forward the args through so
+                // the method receives them. Previous code always used
+                // ThrowawayParameters, which discarded the args and produced
+                // CS7036 "no argument given for required parameter".
+                if (methodArity < delegateArity) {
+                    return CommonConversions.ThrowawayParameters(expr, delegateArity);
+                }
+                return ForwardParametersLambda(expr, delegateArity);
             }
             // C# forbids a method-group conversion for a method marked
             // [Conditional] (or overriding one): CS1618. VB's `AddressOf`
@@ -891,17 +907,21 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             // condition symbol isn't defined).
             if (ms.GetAttributes().Any(a => a.AttributeClass?.Name == "ConditionalAttribute")
                 || ms.OverriddenMethod is { } overridden && overridden.GetAttributes().Any(a => a.AttributeClass?.Name == "ConditionalAttribute")) {
-                int paramCount = nt.DelegateInvokeMethod.Parameters.Length;
-                var paramNames = Enumerable.Range(0, paramCount).Select(i => "arg" + (i + 1)).ToArray();
-                var parameters = SyntaxFactory.ParameterList(SyntaxFactory.SeparatedList(
-                    paramNames.Select(n => SyntaxFactory.Parameter(SyntaxFactory.Identifier(n)))));
-                var args = SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(
-                    paramNames.Select(n => SyntaxFactory.Argument(ValidSyntaxFactory.IdentifierName(n)))));
-                return SyntaxFactory.ParenthesizedLambdaExpression(parameters,
-                    SyntaxFactory.InvocationExpression(expr, args));
+                return ForwardParametersLambda(expr, nt.DelegateInvokeMethod.Parameters.Length);
             }
         }
         return expr;
+    }
+
+    private static ExpressionSyntax ForwardParametersLambda(ExpressionSyntax invocable, int paramCount)
+    {
+        var paramNames = Enumerable.Range(0, paramCount).Select(i => "arg" + (i + 1)).ToArray();
+        var parameters = SyntaxFactory.ParameterList(SyntaxFactory.SeparatedList(
+            paramNames.Select(n => SyntaxFactory.Parameter(SyntaxFactory.Identifier(n)))));
+        var args = SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(
+            paramNames.Select(n => SyntaxFactory.Argument(ValidSyntaxFactory.IdentifierName(n)))));
+        return SyntaxFactory.ParenthesizedLambdaExpression(parameters,
+            SyntaxFactory.InvocationExpression(invocable, args));
     }
 
     public override async Task<CSharpSyntaxNode> VisitBinaryExpression(VBasic.Syntax.BinaryExpressionSyntax entryNode)

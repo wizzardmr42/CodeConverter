@@ -1727,10 +1727,49 @@ public static partial class M
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
     }
 
-    [Fact(Skip = "TDD: CS7036 `Parallel` missing arg (~8 sites) + assorted (14 total). Extension method with ByRef/optional params, receiver dropped even after Me fix — need to inspect specific call sites")]
-    public async Task RemainingMissingRequiredArgAsync()
+    [Fact]
+    public async Task AddressOfMatchingArityWithNullableWideningForwardsArgsAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `AddressOf SetX(decimal?)` bound to `Action<decimal>` — arities
+        // match (1 param each) but signature-check fails because delegate
+        // provides `decimal` while method wants `decimal?`. VB permits the
+        // widening; C# doesn't allow the method-group conversion, so
+        // codeconv needs to wrap in a lambda.
+        //
+        // Previously `ThrowawayParameters` was used which DISCARDED the arg,
+        // producing `(_) => setter()` — CS7036 "no argument given for
+        // required parameter 'value'". Now the arity check distinguishes
+        // FEWER-params (throwaway, e.g. `AddressOf Foo()` → EventHandler)
+        // from MATCHING-arity (forward args through the widening).
+        //
+        // Cleared 4+ CS7036 sites at GetAmazonDimensionsTask —
+        // SetAmazonHeightInches / Width / Depth / WeightLB.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class Item
+    Public Sub SetX(value As Decimal?)
+    End Sub
+End Class
+
+Public Module M
+    Public Sub Do1(item As Item, setter As Action(Of Decimal))
+        setter = AddressOf item.SetX
+    End Sub
+End Module",
+            @"using System;
+
+public partial class Item
+{
+    public void SetX(decimal? value)
+    {
+    }
+}
+
+public static partial class M
+{
+    public static void Do1(Item item, Action<decimal> setter)
+    {
+        setter = (arg1) => item.SetX(arg1);
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0120 + CS0119 type-as-member (21 combined sites, GetUnitDataFromPO). Chained VB Select `Select pold.PurchaseOrderLine, pold Select pold, PurchaseOrderLine, PurchaseOrderLine.StockItem` — the second Select re-projects promoted names as if they were the range var. Transparent-Select fix should reach this once let-emission handles the promoted-name chain")]
