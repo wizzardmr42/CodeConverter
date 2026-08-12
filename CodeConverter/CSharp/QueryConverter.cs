@@ -969,11 +969,18 @@ internal class QueryConverter
         var variable = js.JoinedVariables.Single();
         var convertIdentifier = CommonConversions.ConvertIdentifier(variable.Identifier.Identifier);
 
+        // VB unifies mismatched join key types via its usual conversions
+        // (`On o.ExternalOrderID Equals r.ReplacementOrderRef` with
+        // Integer/String keys). C# Join infers ONE key type and fails with
+        // CS1941 — apply each key's VB conversion (Type -> ConvertedType) so
+        // both sides land on the unified type.
         var joinLhsExpressions = await js.JoinConditions.SelectAsync(async c =>
-            await c.Left.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor));
+            CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(c.Left,
+                await c.Left.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor)));
 
         var joinRhsExpressions = await js.JoinConditions.SelectAsync(async c =>
-            await c.Right.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor));
+            CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(c.Right,
+                await c.Right.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor)));
 
         var (lhsAnonymousExpression, rhsAnonymousExpression) = CreateJoinAnonymousObjectKeys(joinLhsExpressions
             .Zip(joinRhsExpressions, (lhs, rhs) => (Lhs: lhs, Rhs: rhs))
