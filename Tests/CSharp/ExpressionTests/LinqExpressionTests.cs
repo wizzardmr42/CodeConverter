@@ -1728,6 +1728,42 @@ public static partial class M
     }
 
     [Fact]
+    public async Task DecimalPlusDoubleInCompoundExpressionCastsBothToFloatAsync()
+    {
+        // Complement to DecimalPlusDoublePromotesToDecimalAsync: the simple
+        // `Return a + b` case with (decimal, double) return type is already
+        // handled by the top-level assignment analyzer. But nested usages
+        // like `Total = Total + Conversions.ToDouble(c.Value)` (inside a
+        // larger expression tree) don't get the operator-level widening —
+        // the outer `(decimal)(...)` cast is added but the inner `decimal +
+        // double` still fails with CS0019.
+        //
+        // Fix at VisitBinaryExpression: when an arithmetic op (+, -, *, /,
+        // %) mixes decimal with double/single, force both operands to the
+        // wider floating type. Outer conversion casts the result back to
+        // decimal.
+        //
+        // Clears the CS0019 `decimal + double` cluster in ProvisionReport-
+        // Model, ProfitCalculator.PostageAndPackaging, etc. (~14 sites).
+        await TestConversionVisualBasicToCSharpAsync(@"Public Module M
+    Public Sub Do1()
+        Dim Total As Decimal = 0
+        Total = Total + CDbl(""1.5"")
+    End Sub
+End Module",
+            @"using Microsoft.VisualBasic.CompilerServices; // Install-Package Microsoft.VisualBasic
+
+public static partial class M
+{
+    public static void Do1()
+    {
+        decimal Total = 0m;
+        Total = (decimal)((double)Total + Conversions.ToDouble(""1.5""));
+    }
+}");
+    }
+
+    [Fact]
     public async Task AddressOfMatchingArityWithNullableWideningForwardsArgsAsync()
     {
         // VB `AddressOf SetX(decimal?)` bound to `Action<decimal>` — arities

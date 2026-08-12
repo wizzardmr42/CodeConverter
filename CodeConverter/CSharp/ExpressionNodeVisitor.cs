@@ -999,6 +999,33 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                           lhsTypeIgnoringNullable.IsEnumType() && SymbolEqualityComparer.Default.Equals(lhsTypeIgnoringNullable, rhsTypeIgnoringNullable)
                           && !node.IsKind(VBasic.SyntaxKind.AddExpression, VBasic.SyntaxKind.SubtractExpression, VBasic.SyntaxKind.MultiplyExpression, VBasic.SyntaxKind.DivideExpression, VBasic.SyntaxKind.IntegerDivideExpression, VBasic.SyntaxKind.ModuloExpression)
                           && forceLhsTargetType == null;
+        // VB permits `decimal <op> double` etc. via numeric widening; C# does
+        // not (CS0019 "operator '+' cannot be applied to operands of type
+        // 'decimal' and 'double'"). When an arithmetic op mixes decimal with
+        // a floating type (double/single), force both operands to the wider
+        // floating type before the operator. Outer context conversion is
+        // responsible for casting the RESULT back to decimal if needed.
+        if (forceLhsTargetType == null && node.IsKind(
+                VBasic.SyntaxKind.AddExpression, VBasic.SyntaxKind.SubtractExpression,
+                VBasic.SyntaxKind.MultiplyExpression, VBasic.SyntaxKind.DivideExpression,
+                VBasic.SyntaxKind.ModuloExpression)) {
+            var lhsUnderlyingSpecial = lhsTypeIgnoringNullable?.SpecialType ?? SpecialType.None;
+            var rhsUnderlyingSpecial = rhsTypeIgnoringNullable?.SpecialType ?? SpecialType.None;
+            bool lhsIsDecimal = lhsUnderlyingSpecial == SpecialType.System_Decimal;
+            bool rhsIsDecimal = rhsUnderlyingSpecial == SpecialType.System_Decimal;
+            bool lhsIsFloating = lhsUnderlyingSpecial is SpecialType.System_Double or SpecialType.System_Single;
+            bool rhsIsFloating = rhsUnderlyingSpecial is SpecialType.System_Double or SpecialType.System_Single;
+            if ((lhsIsDecimal && rhsIsFloating) || (lhsIsFloating && rhsIsDecimal)) {
+                var widerFloat = (lhsIsFloating && lhsUnderlyingSpecial == SpecialType.System_Double)
+                              || (rhsIsFloating && rhsUnderlyingSpecial == SpecialType.System_Double)
+                    ? _semanticModel.Compilation.GetSpecialType(SpecialType.System_Double)
+                    : _semanticModel.Compilation.GetSpecialType(SpecialType.System_Single);
+                forceLhsTargetType = widerFloat;
+                // We'll also force the RHS below.
+                rhs = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Right, rhs, forceTargetType: widerFloat);
+                omitRightConversion = true;
+            }
+        }
         lhs = omitConversion ? lhs : CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Left, lhs, forceTargetType: forceLhsTargetType);
         rhs = omitConversion || omitRightConversion ? rhs : CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Right, rhs);
 
