@@ -2165,10 +2165,54 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0136 local name conflict with enclosing scope (2 sites, ItemPrice). C# lambda parameter shadowing rules stricter than VB — need to rename inner")]
-    public async Task LambdaParamShadowingEnclosingLocalAsync()
+    [Fact]
+    public async Task ForEachReusingOuterLocalDoesntRedeclareAsync()
     {
-        await TestConversionVisualBasicToCSharpAsync(@"", @"");
+        // VB `For Each x In xs` where `x` is ALREADY declared as an outer
+        // local in the same method REUSES that outer local (VB semantics).
+        // My CS1656 fix (foreach control-variable shadow) was emitting
+        // `var x = currentX;` inside the loop body which then collides
+        // with the outer `x` (CS0136 "cannot be declared in this scope
+        // because that name is used in an enclosing local scope").
+        //
+        // Fix: when varSymbol's declaring syntax is OUTSIDE the loop block
+        // (i.e. VB re-uses an outer local), emit a bare assignment `x =
+        // currentX;` instead of a declaration. The outer local is what
+        // the loop body's references resolve to.
+        //
+        // Clears CS0136 sites in CombinedMapBuilder (`room`), Order.Amazon
+        // (`i`), and ChannelSKU (`ItemPrice`).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Module M
+    Public Sub Do1(items As List(Of Integer))
+        Dim x = items.First()
+        System.Console.WriteLine(x)
+        For Each x In items
+            Dim y = x + 1
+        Next
+        System.Console.WriteLine(x)
+    End Sub
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public static partial class M
+{
+    public static void Do1(List<int> items)
+    {
+        int x = items.First();
+        Console.WriteLine(x);
+        foreach (var currentX in items)
+        {
+            x = currentX;
+            int y = x + 1;
+        }
+        Console.WriteLine(x);
+    }
+}");
     }
 
     [Fact(Skip = "TDD: CS0030 Func<T, bool?> → Func<T, bool> (3 sites, DispatchScheduleRule). Passing an outer-nullable-bool predicate to a bool-Func parameter — needs unwrap wrapper lambda")]

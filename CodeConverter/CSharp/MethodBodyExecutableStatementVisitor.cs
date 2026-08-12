@@ -765,7 +765,17 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
                 // control variable, so there's no outer C# declaration to
                 // assign into. Bare assignment gives CS0103. Using `var` also
                 // matches the exact element type without recomputation.
-                if (v is IdentifierNameSyntax outerId) {
+                //
+                // BUT: when VB `For Each x In xs` reuses an OUTER local `x`
+                // (VB semantics — `varSymbol`'s declaring syntax is outside
+                // the loop), the declaration would collide with the outer
+                // scope (CS0136). Emit a bare assignment instead — the outer
+                // local is what the loop body's references resolve to.
+                bool declaredOutsideLoop = varSymbol.DeclaringSyntaxReferences.Any(dsr =>
+                    !node.Span.Contains(dsr.Span) && dsr.SyntaxTree == node.SyntaxTree);
+                if (declaredOutsideLoop) {
+                    statements.Add(SyntaxFactory.ExpressionStatement(SyntaxFactory.AssignmentExpression(SyntaxKind.SimpleAssignmentExpression, v, ValidSyntaxFactory.IdentifierName(id))));
+                } else if (v is IdentifierNameSyntax outerId) {
                     statements.Add(CommonConversions.CreateLocalVariableDeclarationAndAssignment(outerId.Identifier.Text, ValidSyntaxFactory.IdentifierName(id)));
                 } else {
                     statements.Add(SyntaxFactory.ExpressionStatement(SyntaxFactory.AssignmentExpression(SyntaxKind.SimpleAssignmentExpression, v, ValidSyntaxFactory.IdentifierName(id))));
