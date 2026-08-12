@@ -1262,6 +1262,56 @@ public static partial class M
     }
 
     [Fact]
+    public async Task AnonSelectBoundaryQualifiesDownstreamReferencesAsync()
+    {
+        // BMCore ResetProblemBatchAssignments / GetAmazonListingPricesTask:
+        // a mid-query Select with TWO bare range vars (`Select ooi, o,
+        // HasPicked = ...`) can't be let-emitted, so it becomes a real anon
+        // select ending the segment. Downstream clauses (orderby, final
+        // Select) still reference the members bare — CS0103 `HasPicked`/`o`.
+        // The downstream segment's references must be qualified with its
+        // range variable: `ooi.HasPicked`, `ooi.o`, `select ooi.ooi`.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Ooi
+    Public Property OrderID As Integer
+    Public Property Quantity As Integer
+End Class
+
+Public Module M
+    Public Function Reorder(boois As List(Of Ooi), odict As Dictionary(Of Integer, Integer)) As List(Of Ooi)
+        Return (From ooi In boois
+                Select ooi, o = odict(ooi.OrderID)
+                Select ooi, o, HasPicked = If(o > 0, 0, 1)
+                Order By HasPicked, ooi.Quantity Descending
+                Select ooi).ToList()
+    End Function
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Ooi
+{
+    public int OrderID { get; set; }
+    public int Quantity { get; set; }
+}
+
+public static partial class M
+{
+    public static List<Ooi> Reorder(List<Ooi> boois, Dictionary<int, int> odict)
+    {
+        return (from ooi in
+                    from ooi in boois
+                    let o = odict[ooi.OrderID]
+                    select new { ooi, o, HasPicked = o > 0 ? 0 : 1 }
+                orderby ooi.HasPicked, ooi.ooi.Quantity descending
+                select ooi.ooi).ToList();
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

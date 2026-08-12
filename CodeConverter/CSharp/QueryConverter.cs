@@ -146,6 +146,7 @@ internal class QueryConverter
     private async Task<CSharpSyntaxNode> ConvertQuerySegmentsAsync(IEnumerable<(Queue<(SyntaxList<CSSyntax.QueryClauseSyntax>, VBSyntax.QueryClauseSyntax)>, VBSyntax.QueryClauseSyntax)> querySegments, SyntaxToken reusableFromCsId, CSSyntax.FromClauseSyntax fromClauseSyntax = null)
     {
         CSSyntax.ExpressionSyntax query = null;
+        IReadOnlyCollection<string> anonMembersInScope = null;
         foreach (var (queryContinuation, queryEnd) in querySegments) {
             // Capture the segment's last VB clause BEFORE ConvertQueryWith-
             // ContinuationAsync drains the queue — used to detect a
@@ -157,9 +158,32 @@ internal class QueryConverter
                 subQuery = subQuery.WithClauses(subQuery.Clauses.Remove(fromClauseSyntax));
             }
 
+            // A previous segment produced an anonymous element (`select new
+            // { ooi, o, HasPicked }`). VB's transparent identifier lets
+            // downstream clauses reference those members bare; in C# they're
+            // members of this segment's range variable — qualify them
+            // (`HasPicked` -> `ooi.HasPicked`, `select ooi` -> `select
+            // ooi.ooi`) or they fail with CS0103.
+            if (anonMembersInScope != null && subQuery != null) {
+                subQuery = (CSSyntax.QueryBodySyntax)new QualifyAnonMembersRewriter(reusableFromCsId.ValueText, anonMembersInScope).Visit(subQuery);
+            }
+
             // e.g. `from x in xs select x` is not useful, so just use `xs` directly
             bool isUsefulQuery = subQuery is not null && (!subQuery.SelectOrGroup.HasAnnotation(DefaultSelectAnnotation) || subQuery.Clauses.Any());
             query = isUsefulQuery ? SyntaxFactory.QueryExpression(fromClauseSyntax, subQuery) : fromClauseSyntax.Expression;
+
+            // Track the shape flowing into the next segment: a final anon
+            // select starts (or replaces) the member set; an implicit/default
+            // select passes the current shape through; anything else ends it.
+            if (isUsefulQuery) {
+                var finalBody = subQuery;
+                while (finalBody.Continuation != null) finalBody = finalBody.Continuation.Body;
+                if (GetAnonSelectMemberNamesOrNull(finalBody) is { } names) {
+                    anonMembersInScope = names;
+                } else if (!finalBody.SelectOrGroup.HasAnnotation(DefaultSelectAnnotation)) {
+                    anonMembersInScope = null;
+                }
+            }
 
             if (queryEnd is not null) {
                 query = await ConvertQueryToLinqAsync(reusableFromCsId, queryEnd, query);
@@ -936,5 +960,98 @@ internal class QueryConverter
         expression.Rhs = lhs;
 
         return expression;
+    }
+
+    private static IReadOnlyCollection<string> GetAnonSelectMemberNamesOrNull(CSSyntax.QueryBodySyntax finalBody)
+    {
+        if (finalBody.SelectOrGroup is not CSSyntax.SelectClauseSyntax sel ||
+            sel.Expression is not CSSyntax.AnonymousObjectCreationExpressionSyntax anon) return null;
+        var names = anon.Initializers
+            .Select(i => i.NameEquals?.Name.Identifier.ValueText
+                         ?? (i.Expression as CSSyntax.IdentifierNameSyntax)?.Identifier.ValueText
+                         ?? ((i.Expression as CSSyntax.MemberAccessExpressionSyntax)?.Name as CSSyntax.IdentifierNameSyntax)?.Identifier.ValueText)
+            .Where(n => n != null)
+            .ToList();
+        return names.Count > 0 ? names : null;
+    }
+
+    /// <summary>
+    /// Rewrites bare references to a previous segment's anonymous-select
+    /// members into member accesses on the current segment's range variable
+    /// (VB's transparent identifier made them look like locals). Skips scopes
+    /// that redeclare a matching name (lambda parameters, nested query range
+    /// variables) and the harness's own synthesized default selects, which
+    /// pass the element through unchanged.
+    /// </summary>
+    private sealed class QualifyAnonMembersRewriter : CSharpSyntaxRewriter
+    {
+        private readonly string _qualifier;
+        private HashSet<string> _names;
+
+        public QualifyAnonMembersRewriter(string qualifier, IEnumerable<string> names)
+        {
+            _qualifier = qualifier;
+            _names = new HashSet<string>(names, StringComparer.Ordinal);
+        }
+
+        public override SyntaxNode VisitIdentifierName(CSSyntax.IdentifierNameSyntax node)
+        {
+            if (!_names.Contains(node.Identifier.ValueText) || !IsQualifiablePosition(node)) return node;
+            return SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                ValidSyntaxFactory.IdentifierName(_qualifier), node.WithoutTrivia()).WithTriviaFrom(node);
+        }
+
+        private static bool IsQualifiablePosition(CSSyntax.IdentifierNameSyntax node) => node.Parent switch {
+            CSSyntax.MemberAccessExpressionSyntax ma when ma.Name == node => false,
+            CSSyntax.NameEqualsSyntax => false,
+            CSSyntax.NameColonSyntax => false,
+            CSSyntax.QualifiedNameSyntax => false,
+            CSSyntax.MemberBindingExpressionSyntax => false,
+            _ => true
+        };
+
+        public override SyntaxNode VisitSelectClause(CSSyntax.SelectClauseSyntax node) =>
+            node.HasAnnotation(DefaultSelectAnnotation) ? node : base.VisitSelectClause(node);
+
+        public override SyntaxNode VisitAnonymousObjectMemberDeclarator(CSSyntax.AnonymousObjectMemberDeclaratorSyntax node)
+        {
+            // A bare-identifier member (`new { ooi }`) that gets qualified
+            // loses its inferrable name — pin it with an explicit NameEquals.
+            if (node.NameEquals == null && node.Expression is CSSyntax.IdentifierNameSyntax id && _names.Contains(id.Identifier.ValueText)) {
+                node = node.WithNameEquals(SyntaxFactory.NameEquals(ValidSyntaxFactory.IdentifierName(id.Identifier.ValueText)));
+            }
+            return base.VisitAnonymousObjectMemberDeclarator(node);
+        }
+
+        public override SyntaxNode VisitSimpleLambdaExpression(CSSyntax.SimpleLambdaExpressionSyntax node) =>
+            VisitWithShadowed(new[] { node.Parameter.Identifier.ValueText }, () => base.VisitSimpleLambdaExpression(node));
+
+        public override SyntaxNode VisitParenthesizedLambdaExpression(CSSyntax.ParenthesizedLambdaExpressionSyntax node) =>
+            VisitWithShadowed(node.ParameterList.Parameters.Select(p => p.Identifier.ValueText), () => base.VisitParenthesizedLambdaExpression(node));
+
+        public override SyntaxNode VisitQueryExpression(CSSyntax.QueryExpressionSyntax node)
+        {
+            // A nested query redeclares its own range variables — its bare
+            // references to those names must not be qualified.
+            var declared = node.DescendantNodes().SelectMany(n => n switch {
+                CSSyntax.FromClauseSyntax f => new[] { f.Identifier.ValueText },
+                CSSyntax.LetClauseSyntax l => new[] { l.Identifier.ValueText },
+                CSSyntax.JoinClauseSyntax j => new[] { (j.Into?.Identifier ?? j.Identifier).ValueText },
+                CSSyntax.QueryContinuationSyntax qc => new[] { qc.Identifier.ValueText },
+                _ => Array.Empty<string>()
+            });
+            return VisitWithShadowed(declared, () => base.VisitQueryExpression(node));
+        }
+
+        private SyntaxNode VisitWithShadowed(IEnumerable<string> shadowed, Func<SyntaxNode> visit)
+        {
+            var saved = _names;
+            _names = new HashSet<string>(_names.Except(shadowed), StringComparer.Ordinal);
+            try {
+                return visit();
+            } finally {
+                _names = saved;
+            }
+        }
     }
 }
