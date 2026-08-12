@@ -1672,7 +1672,7 @@ public static partial class M
 }");
     }
 
-    [Fact(Skip = "TDD: CS0266 `string` → `SqlQueryWithParameters` (3 sites). VB widens String to SqlQueryWithParameters via `Widening Operator CType`. Codeconv drops the implicit conversion at assignment sites")]
+    [Fact(Skip = "TDD: CS0266 `string` → `SqlQueryWithParameters` (3 sites). Simple probe with a direct Narrowing CType on the exact target type ALREADY produces the correct explicit cast. The failing BMCore shape is subtler — the target is `SqlQueryWithParametersAndUIAlerts`, a subclass of the type carrying the CType(String) operator, so VB has to chain String→Base→Derived while C# needs both a user-defined cast and a downcast. Needs a subclass-aware repro before the fix can be scoped")]
     public async Task StringToSqlQueryWithParametersImplicitConversionAsync()
     {
         await TestConversionVisualBasicToCSharpAsync(@"", @"");
