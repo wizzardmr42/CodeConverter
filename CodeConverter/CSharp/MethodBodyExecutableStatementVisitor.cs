@@ -320,7 +320,10 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
             var lhsOperand = lhs;
             var lhsOperandType = lhsTypeInfo.Type;
             bool lhsIsNullable = lhsOperandType.IsNullable(out var lhsUnderlying);
-            var rhsOpType = rhsTypeInfo.ConvertedType;
+            // Use the rhs's OWN type: for `decimal? += double` VB reports the
+            // rhs ConvertedType as the lhs type (the final narrowing), hiding
+            // the floating operand that forces the promotion.
+            var rhsOpType = rhsTypeInfo.Type ?? rhsTypeInfo.ConvertedType;
             if ((lhsUnderlying ?? lhsOperandType)?.SpecialType == SpecialType.System_Decimal
                 && rhsOpType?.SpecialType is SpecialType.System_Double or SpecialType.System_Single) {
                 var promotedType = _semanticModel.Compilation.GetSpecialType(rhsOpType.SpecialType);
@@ -328,6 +331,13 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
                     ? _semanticModel.Compilation.GetSpecialType(SpecialType.System_Nullable_T).Construct(promotedType)
                     : promotedType;
                 lhsOperand = ValidSyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(castTarget), lhs);
+            } else if (lhsOperandType?.SpecialType == SpecialType.System_String
+                       && node.Kind() is VBasic.SyntaxKind.DivideAssignmentStatement or VBasic.SyntaxKind.MultiplyAssignmentStatement
+                           or VBasic.SyntaxKind.SubtractAssignmentStatement or VBasic.SyntaxKind.ExponentiateAssignmentStatement) {
+                // VB `strProp /= 100` converts the string operand to Double
+                // (Option Strict Off arithmetic); C# has no string arithmetic.
+                lhsOperand = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Left, lhs,
+                    forceTargetType: _semanticModel.Compilation.GetSpecialType(SpecialType.System_Double));
             }
 
             var nonCompoundRhs = SyntaxFactory.BinaryExpression(nonCompound, lhsOperand, typeConvertedRhs);

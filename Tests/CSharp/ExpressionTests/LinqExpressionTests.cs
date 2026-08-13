@@ -2202,6 +2202,38 @@ public partial class C
     }
 
     [Fact]
+    public async Task StringDividedByNumberConvertsToDoubleAsync()
+    {
+        // BMCore ProvisionReportModel: `c.Value = (c.Value / 100).ToString`
+        // where Value is String — VB converts BOTH operands to Double.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class Cell
+    Public Property Value As String
+End Class
+
+Public Module M
+    Public Sub Do1(c As Cell)
+        c.Value = (c.Value / 100).ToString()
+        c.Value /= 100
+    End Sub
+End Module",
+            @"using Microsoft.VisualBasic.CompilerServices; // Install-Package Microsoft.VisualBasic
+
+public partial class Cell
+{
+    public string Value { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(Cell c)
+    {
+        c.Value = (Conversions.ToDouble(c.Value) / 100d).ToString();
+        c.Value = (Conversions.ToDouble(c.Value) / 100d).ToString();
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
