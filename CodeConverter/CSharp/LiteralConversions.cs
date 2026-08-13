@@ -105,8 +105,16 @@ internal static class LiteralConversions
 
     internal static string GetQuotedStringTextForUser(string textForUser, string valueTextForCompiler)
     {
-        var sourceUnquotedTextForUser = Unquote(textForUser);
         var worthBeingAVerbatimString = IsWorthBeingAVerbatimString(valueTextForCompiler);
+        if (!worthBeingAVerbatimString && valueTextForCompiler.IndexOfAny(new[] { '\r', '\n', '\\' }) > -1) {
+            // The plain path below escapes VB's "" quotes only; a value containing
+            // newlines or backslashes that ISN'T taking the verbatim path (e.g. a
+            // multi-line string with lone \n) would emit an invalid or silently
+            // corrupted literal (BMCore's embedded R script lost a level of
+            // backslash escaping this way). Use canonical C# escaping instead.
+            return SymbolDisplay.FormatLiteral(valueTextForCompiler, quote: true);
+        }
+        var sourceUnquotedTextForUser = Unquote(textForUser);
         var destQuotedTextForUser =
             $"\"{EscapeQuotes(sourceUnquotedTextForUser, valueTextForCompiler, worthBeingAVerbatimString)}\"";
 
