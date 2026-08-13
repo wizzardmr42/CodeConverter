@@ -2316,6 +2316,69 @@ public static partial class M
     }
 
     [Fact]
+    public async Task GroupByAfterJoinGroupsTransparentElementAsync()
+    {
+        // BMCore MarineInsurance: `From po In POS Join r In ... Group By
+        // r.Region Into Group` — with no Items, VB groups the TRANSPARENT
+        // {po, r} element; downstream does `rg.Group.Sum(Function(l)
+        // l.po.TotalCostGBP)`. Grouping just `po` dropped `r` and broke
+        // `l.po` (CS1061).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Po
+    Public Property CountryID As Integer
+    Public Property TotalCostGBP As Decimal
+End Class
+
+Public Class Rc
+    Public Property CountryID As Integer
+    Public Property Region As String
+End Class
+
+Public Module M
+    Public Function RegionTotals(pos As Po(), rcs As List(Of Rc)) As Dictionary(Of String, Decimal)
+        Dim regionPOs = (From po In pos Join r In rcs On r.CountryID Equals po.CountryID Group By r.Region Into Group).ToList()
+        Dim d As New Dictionary(Of String, Decimal)
+        For Each rg In regionPOs
+            d.Add(rg.Region, rg.Group.Sum(Function(l) l.po.TotalCostGBP))
+        Next
+        Return d
+    End Function
+End Module",
+            @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Po
+{
+    public int CountryID { get; set; }
+    public decimal TotalCostGBP { get; set; }
+}
+
+public partial class Rc
+{
+    public int CountryID { get; set; }
+    public string Region { get; set; }
+}
+
+public static partial class M
+{
+    public static Dictionary<string, decimal> RegionTotals(Po[] pos, List<Rc> rcs)
+    {
+        var regionPOs = (from po in pos
+                         join r in rcs on po.CountryID equals r.CountryID
+                         group new { po, r } by r.Region into Group
+                         let Region = Group.Key
+                         select new { Region = Group.Key, Group }).ToList();
+        var d = new Dictionary<string, decimal>();
+        foreach (var rg in regionPOs)
+            d.Add(rg.Region, rg.Group.Sum(l => l.po.TotalCostGBP));
+        return d;
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

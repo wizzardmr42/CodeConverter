@@ -453,9 +453,17 @@ internal class QueryConverter
                     continuationClauses = continuationClauses.Add(letGroupKey);
                 }
                 if (!gcs.Items.Any()) {
-                    var identifierNameSyntax =
-                        ValidSyntaxFactory.IdentifierName(reusableCsFromId);
-                    selectOrGroup = SyntaxFactory.GroupClause(identifierNameSyntax, await GetGroupExpressionAsync(gcs));
+                    // VB `Group By key Into Group` with no Items groups the
+                    // TRANSPARENT element — when several range variables are
+                    // live (`From po ... Join r ...`), the group's elements
+                    // are the {po, r} pairs and downstream code accesses
+                    // `l.po.X`. Grouping just the from-variable drops the
+                    // rest (CS1061).
+                    CSSyntax.ExpressionSyntax groupElement = liveNames.Count > 1
+                        ? SyntaxFactory.AnonymousObjectCreationExpression(SyntaxFactory.SeparatedList(
+                            liveNames.Select(n => SyntaxFactory.AnonymousObjectMemberDeclarator(ValidSyntaxFactory.IdentifierName(n)))))
+                        : ValidSyntaxFactory.IdentifierName(reusableCsFromId);
+                    selectOrGroup = SyntaxFactory.GroupClause(groupElement, await GetGroupExpressionAsync(gcs));
                 } else {
                     var item = await gcs.Items.Single().Expression.AcceptAsync<CSSyntax.IdentifierNameSyntax>(_triviaConvertingVisitor);
                     var keyExpression = await gcs.Keys.Single().Expression.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
