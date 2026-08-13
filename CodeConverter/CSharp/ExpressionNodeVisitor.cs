@@ -2006,6 +2006,9 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         }
 
         if (sym is ILocalSymbol) {
+            if (sym is ILocalSymbol renamedLocal && CommonConversions.RenamedLocals.TryGetValue(renamedLocal, out var newName)) {
+                qualifiedIdentifier = SyntaxFactory.IdentifierName(newName);
+            }
             if (sym.IsStatic && sym.ContainingSymbol is IMethodSymbol m && m.AssociatedSymbol is IPropertySymbol) {
                 qualifiedIdentifier = qualifiedIdentifier.WithParentPropertyAccessorKind(m.MethodKind);
             }
@@ -2071,7 +2074,12 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     {
         var symbol = GetSymbolInfoInDocument<ISymbol>(node);
         var genericNameSyntax = await GenericNameAccountingForReducedParametersAsync(node, symbol);
-        return await AdjustForImplicitInvocationAsync(node, genericNameSyntax);
+        // A bare generic reference to a VB Module member (`GetItems(Of T)()`) needs
+        // the module qualifier in C#, same as VisitIdentifierName does for non-generics.
+        bool requiresQualification = !node.Parent.IsKind(VBasic.SyntaxKind.SimpleMemberAccessExpression, VBasic.SyntaxKind.QualifiedName) ||
+                                     node.Parent is VBasic.Syntax.MemberAccessExpressionSyntax maes && maes.Expression == node;
+        var qualified = requiresQualification ? QualifyNode(node, genericNameSyntax) : genericNameSyntax;
+        return await AdjustForImplicitInvocationAsync(node, qualified);
     }
 
     /// <summary>

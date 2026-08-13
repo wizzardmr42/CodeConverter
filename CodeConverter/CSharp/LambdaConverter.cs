@@ -87,7 +87,8 @@ internal class LambdaConverter
             if (potentialAncestorDeclarationOperation is IVariableDeclarationOperation variableDeclaration) {
                 var variableDeclaratorOperation = variableDeclaration.Declarators.Single();
                 if (!variableDeclaratorOperation.Symbol.Type.IsDelegateReferencableByName() &&
-                    await _solution.IsNeverWrittenAsync(variableDeclaratorOperation.Symbol)) {
+                    await _solution.IsNeverWrittenAsync(variableDeclaratorOperation.Symbol) &&
+                    !IsReferencedInsideExpressionTree(variableDeclaratorOperation.Symbol, variableDeclaratorOperation.Syntax)) {
                     //Should do: Check no (other) write usages exist: SymbolFinder.FindReferencesAsync + checking if they're an assignment LHS or out parameter
                     return CreateLocalFunction(anonFuncOp, variableDeclaratorOperation, paramListWithTypes, block,
                         arrow);
@@ -96,6 +97,29 @@ internal class LambdaConverter
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// A lambda-holding variable converted to a local function breaks any reference to
+    /// it inside an expression-tree lambda (CS8110) — delegate invocation is fine in an
+    /// expression tree, a local function reference is not. Keep those as delegates.
+    /// </summary>
+    private bool IsReferencedInsideExpressionTree(ILocalSymbol localSymbol, SyntaxNode declaration)
+    {
+        var scope = (SyntaxNode)declaration.GetAncestor<VBSyntax.MethodBlockBaseSyntax>() ?? declaration.Parent;
+        if (scope == null) return false;
+        foreach (var id in scope.DescendantNodes().OfType<VBSyntax.IdentifierNameSyntax>()) {
+            if (!id.Identifier.ValueText.Equals(localSymbol.Name, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!SymbolEqualityComparer.Default.Equals(_semanticModel.GetSymbolInfo(id).Symbol, localSymbol)) continue;
+            for (var ancestor = id.Parent; ancestor != null && ancestor != scope; ancestor = ancestor.Parent) {
+                if (ancestor is VBSyntax.LambdaExpressionSyntax lambda &&
+                    _semanticModel.GetTypeInfo(lambda).ConvertedType is INamedTypeSymbol { Name: nameof(System.Linq.Expressions.Expression), Arity: 1 } converted &&
+                    converted.ContainingNamespace?.ToDisplayString() == "System.Linq.Expressions") {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private MethodDeclarationSyntax CreateMethodDeclaration(IAnonymousFunctionOperation operation,

@@ -782,6 +782,46 @@ internal partial class TestClass
     }
 
     [Fact]
+    public async Task HoistedLoopVariableCollidingWithSiblingBranchDeclarationsIsRenamedAsync()
+    {
+        // The hoisted declaration lands in the method scope; same-named initialized
+        // declarations in sibling branches would then be CS0136 collisions, so the
+        // hoisted variable is renamed and its references follow.
+        await TestConversionVisualBasicToCSharpAsync(@"Class TestClass
+    Private Sub TestMethod(flag As Boolean, items As Integer())
+        If flag Then
+            Dim price As Decimal = 1D
+            Console.WriteLine(price)
+        End If
+        For Each item In items
+            Dim price As Decimal
+            If item > 1 Then price = item
+            Console.WriteLine(price)
+        Next
+    End Sub
+End Class", @"using System;
+
+internal partial class TestClass
+{
+    private void TestMethod(bool flag, int[] items)
+    {
+        if (flag)
+        {
+            decimal price = 1m;
+            Console.WriteLine(price);
+        }
+        var price1 = default(decimal);
+        foreach (var item in items)
+        {
+            if (item > 1)
+                price1 = item;
+            Console.WriteLine(price1);
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task ForWithVariableDeclarationIssue998Async()
     {
         await TestConversionVisualBasicToCSharpAsync(@"Class TestClass

@@ -4302,4 +4302,87 @@ public static partial class M
     }
 }");
     }
+
+    [Fact]
+    public async Task GroupByAfterMultiNameSelectQualifiesKeyAndAggregateArgsAsync()
+    {
+        // `Select sl, Amount = ...` keeps sl live via let-emit; the following
+        // Group By key (`sl.Kind`) and Into aggregate arg (`Amount`, binding the
+        // anon element's member through the group lambda param) must both resolve.
+        // Regression source: BMCore/ProfitCalculation/ProfitCalculator.OrderItemProfitCalculator.cs(1510).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Line
+    Public Property Kind As Integer
+    Public Property Amount As Decimal
+End Class
+
+Public Module M
+    Public Function Do1(lines As IEnumerable(Of Line)) As Integer
+        Dim summaries = (From sl In lines
+                         Where sl.Kind >= 0
+                         Select sl, Amount = If(sl.Kind > 1, sl.Amount * 2, sl.Amount)
+                         Group By sl.Kind
+                         Into Total = Sum(Amount)).ToList
+        Return summaries.Count
+    End Function
+End Module", @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Line
+{
+    public int Kind { get; set; }
+    public decimal Amount { get; set; }
+}
+
+public static partial class M
+{
+    public static int Do1(IEnumerable<Line> lines)
+    {
+        var summaries = (from sl in lines
+                         where sl.Kind >= 0
+                         let Amount = sl.Kind > 1 ? sl.Amount * 2m : sl.Amount
+                         group new { sl, Amount } by sl.Kind into Group
+                         let Kind = Group.Key
+                         select new { Kind = Group.Key, Total = Group.Sum(sl => sl.Amount) }).ToList();
+        return summaries.Count;
+    }
+}");
+    }
+
+    [Fact]
+    public async Task OrderedQueryOfAnonymousTypeReassignedWithUnorderedEmitsAsQueryableAsync()
+    {
+        // `Dim q = (From ... Order By ...)` infers IOrderedQueryable(Of anon);
+        // `q = q.Take(n)` reassigns with IQueryable(Of anon). The widened type
+        // can't be spelled out (anonymous element), so erase the ordered
+        // interface on the initializer with .AsQueryable() and keep `var`.
+        // Regression source: BMCore/Server/SetOrderPackagingGroupsInLinnworks.cs(381).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Linq
+
+Public Module M
+    Public Function Do1(items As IQueryable(Of Integer)) As Integer
+        Dim q = (From i In items
+                 Select i, Doubled = i * 2
+                 Order By i)
+        q = q.Take(3)
+        Return q.Count()
+    End Function
+End Module",
+            @"using System.Linq;
+
+public static partial class M
+{
+    public static int Do1(IQueryable<int> items)
+    {
+        var q = (from i in items
+                 let Doubled = i * 2
+                 orderby i
+                 select new { i, Doubled }).AsQueryable();
+        q = q.Take(3);
+        return q.Count();
+    }
+}");
+    }
 }

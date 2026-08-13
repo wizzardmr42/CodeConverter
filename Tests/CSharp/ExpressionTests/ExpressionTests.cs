@@ -1690,6 +1690,34 @@ internal partial class TestClass
     }
 
     [Fact]
+    public async Task LambdaVariableReferencedInExpressionTreeStaysADelegateAsync()
+    {
+        // Converting to a local function would be CS8110: an expression tree may
+        // not contain a reference to a local function. Delegate invocation is fine.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Linq.Expressions
+
+Class TestClass
+    Private Sub TestMethod()
+        Dim getQual = Function(cid As Integer?) If(cid.HasValue, ""y"", ""n"")
+        Dim expr As Expression(Of Func(Of Integer?, String)) = Function(r) getQual(r)
+        Console.WriteLine(expr)
+    End Sub
+End Class", @"using System;
+using System.Linq.Expressions;
+
+internal partial class TestClass
+{
+    private void TestMethod()
+    {
+        Func<int?, string> getQual = (cid) => cid.HasValue ? ""y"" : ""n"";
+        Expression<Func<int?, string>> expr = r => getQual(r);
+        Console.WriteLine(expr);
+    }
+}");
+    }
+
+    [Fact]
     public async Task Issue316_LambdaExpressionEqualityCheckAsync()
     {
         await TestConversionVisualBasicToCSharpAsync(@"Option Compare Text

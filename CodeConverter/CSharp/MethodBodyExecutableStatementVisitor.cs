@@ -207,12 +207,24 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
                 var symbol = _semanticModel.GetDeclaredSymbol(vbVariable);
                 var assignedBeforeRead = _semanticModel.IsDefinitelyAssignedBeforeRead(symbol, vbVariable);
                 if (!assignedBeforeRead) {
+                    // Hoisting moves the declaration to an outer scope; if another local or
+                    // parameter elsewhere in the method shares the name, the hoisted copy
+                    // would now collide with it (CS0136). Rename this symbol and let
+                    // identifier references pick up the new name via RenamedLocals.
+                    var hoistedName = csVariable.Identifier.Text;
+                    bool renamed = false;
+                    if (symbol is ILocalSymbol localSymbol && LocalNameUsedElsewhereInMethod(vbVariable, hoistedName)) {
+                        hoistedName = GetUniqueVariableNameInScope(vbVariable, hoistedName);
+                        CommonConversions.RenamedLocals[localSymbol] = hoistedName;
+                        renamed = true;
+                    }
                     _perScopeState.Hoist(new HoistedDefaultInitializedLoopVariable(
-                        csVariable.Identifier.Text,
+                        hoistedName,
                         // e.g. "b As Boolean" has no initializer but can turn into "var b = default(bool)"
                         csVariable.Initializer?.Value,
                         variablesDecl.Decl.Type,
-                        _perScopeState.IsInsideNestedLoop()));
+                        _perScopeState.IsInsideNestedLoop(),
+                        alreadyUnique: renamed));
                     variablesToRemove.Add(csVariable);
                 }
             }
@@ -223,6 +235,32 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
             }
         }
     }
+
+    /// <summary>
+    /// True if another declaration (local or parameter, including lambda/local-function
+    /// parameters) in the enclosing method uses this name. Syntax-only over-approximation:
+    /// a false positive just renames a hoisted variable unnecessarily.
+    /// </summary>
+    private static bool LocalNameUsedElsewhereInMethod(VBSyntax.ModifiedIdentifierSyntax vbVariable, string name)
+    {
+        var methodBlock = (VBasic.VisualBasicSyntaxNode)vbVariable.GetAncestor<VBSyntax.MethodBlockBaseSyntax>() ?? vbVariable.GetAncestor<VBSyntax.LambdaExpressionSyntax>();
+        if (methodBlock == null) return false;
+        return methodBlock.DescendantNodes().OfType<VBSyntax.ModifiedIdentifierSyntax>()
+            .Any(mi => mi != vbVariable && mi.Identifier.ValueText.Equals(name, StringComparison.OrdinalIgnoreCase) &&
+                       WillRemainDeclaredLocally(mi));
+    }
+
+    /// <summary>
+    /// Declarations that stay where they are in the output (rather than being hoisted
+    /// and deduplicated by the loop-variable machinery): parameters, query range
+    /// variables, and initialized declarators.
+    /// </summary>
+    private static bool WillRemainDeclaredLocally(VBSyntax.ModifiedIdentifierSyntax mi) => mi.Parent switch {
+        VBSyntax.ParameterSyntax => true,
+        VBSyntax.CollectionRangeVariableSyntax => true,
+        VBSyntax.VariableDeclaratorSyntax d => d.Initializer != null || d.AsClause is VBSyntax.AsNewClauseSyntax,
+        _ => false
+    };
 
     public override async Task<SyntaxList<StatementSyntax>> VisitAddRemoveHandlerStatement(VBSyntax.AddRemoveHandlerStatementSyntax node)
     {

@@ -92,10 +92,27 @@ internal class CommonConversions
             var declaredSymbolType = declaredSymbol.GetSymbolType();
             var widenedSymbolType = WidenTypeForReassignments(declaredSymbol as ILocalSymbol, declaredSymbolType, declarator);
             if (!ReferenceEquals(widenedSymbolType, declaredSymbolType)) {
-                declaredSymbolType = widenedSymbolType;
-                // `var` would re-infer the narrow initializer type — the
-                // widened declaration must be spelled out.
-                preferExplicitType = true;
+                if (widenedSymbolType.ContainsAnonymousType()) {
+                    // The widened type can't be spelled out (anonymous element type,
+                    // e.g. IOrderedQueryable<anon> reassigned with IQueryable<anon>).
+                    // Erase the too-narrow interface on the initializer instead so
+                    // `var` infers the widened one.
+                    string erasureMethod = widenedSymbolType.OriginalDefinition.GetFullMetadataName() switch {
+                        "System.Linq.IQueryable`1" => "AsQueryable",
+                        "System.Collections.Generic.IEnumerable`1" => "AsEnumerable",
+                        _ => null
+                    };
+                    if (erasureMethod != null && initializerOrMethodDecl is ExpressionSyntax initExpr) {
+                        initializerOrMethodDecl = SyntaxFactory.InvocationExpression(
+                            SyntaxFactory.MemberAccessExpression(CSSyntaxKind.SimpleMemberAccessExpression,
+                                initExpr.AddParens(), SyntaxFactory.IdentifierName(erasureMethod)));
+                    }
+                } else {
+                    declaredSymbolType = widenedSymbolType;
+                    // `var` would re-infer the narrow initializer type — the
+                    // widened declaration must be spelled out.
+                    preferExplicitType = true;
+                }
             }
             if (preferExplicitTypeForTrivialQueryInit
                 && declaredSymbolType is { TypeKind: not TypeKind.Error } && declaredSymbolType.SpecialType != SpecialType.System_Object) {
@@ -130,6 +147,13 @@ internal class CommonConversions
     /// reassignments to these must not re-narrow with a cast back to the VB-declared type.
     /// </summary>
     public HashSet<ILocalSymbol> WidenedReassignedLocals { get; } = new(SymbolEqualityComparer.IncludeNullability);
+
+    /// <summary>
+    /// Locals renamed during conversion (e.g. a hoisted loop variable whose
+    /// name collides with sibling-scope declarations, CS0136). Identifier
+    /// references bound to these symbols emit the new name.
+    /// </summary>
+    public Dictionary<ILocalSymbol, string> RenamedLocals { get; } = new(SymbolEqualityComparer.IncludeNullability);
 
     /// <summary>
     /// VB Option Strict Off pattern: `Dim q = Context.PurchaseOrderLines`

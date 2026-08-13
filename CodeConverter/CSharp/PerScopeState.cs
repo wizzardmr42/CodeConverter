@@ -122,7 +122,9 @@ internal class PerScopeState
                 HoistToParent(variable);
             } else {
                 // The variable comes from the VB scope, only check for conflict with other hoisted definitions
-                string name = NameGenerator.CS.GenerateUniqueVariableName(generatedNames, CommonConversions.CsEscapedIdentifier(variable.OriginalVariableName).Text);
+                string name = variable.AlreadyUnique
+                    ? CommonConversions.CsEscapedIdentifier(variable.OriginalVariableName).Text
+                    : NameGenerator.CS.GenerateUniqueVariableName(generatedNames, CommonConversions.CsEscapedIdentifier(variable.OriginalVariableName).Text);
                 if (variable.Nested) {
                     newNames.Add(variable.Id, name);
                 } else if (name != variable.OriginalVariableName) {
