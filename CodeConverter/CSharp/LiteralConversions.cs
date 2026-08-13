@@ -59,8 +59,15 @@ internal static class LiteralConversions
                 return SyntaxFactory.LiteralExpression(CSSyntaxKind.CharacterLiteralExpression, SyntaxFactory.Literal(c));
             case DateTime dt:
             {
-                var valueToOutput = dt.Date.Equals(dt) ? dt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : dt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-                return SyntaxFactory.ParseExpression("DateTime.Parse(\"" + valueToOutput + "\")");
+                // Culture-free constructor call, not DateTime.Parse: Parse re-parses at
+                // runtime with the CURRENT culture (fragile) and is not a compile-time
+                // constant shape. A comment preserves the human-readable value.
+                var ctorArgs = dt.Date.Equals(dt)
+                    ? $"{dt.Year}, {dt.Month}, {dt.Day}"
+                    : $"{dt.Year}, {dt.Month}, {dt.Day}, {dt.Hour}, {dt.Minute}, {dt.Second}";
+                var display = dt.Date.Equals(dt) ? dt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : dt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                return SyntaxFactory.ParseExpression($"new DateTime({ctorArgs})")
+                    .WithTrailingTrivia(SyntaxFactory.Comment($"/* {display} */"));
             }
             default:
                 throw new ArgumentOutOfRangeException(nameof(value), value, null);

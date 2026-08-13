@@ -538,7 +538,7 @@ public partial class Issue806
 {
     public void Foo()
     {
-        string x = Conversions.ToString(DateTime.Parse(""2022-01-01"")) + "" 15:00"";
+        string x = Conversions.ToString(new DateTime(2022, 1, 1)/* 2022-01-01 */) + "" 15:00"";
     }
 }");
     }

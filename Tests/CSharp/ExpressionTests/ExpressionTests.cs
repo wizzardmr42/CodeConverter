@@ -165,8 +165,8 @@ internal partial class TestClass
 {
     private void TestMethod([Optional, DateTimeConstant(599266080000000000L/* #1/1/1900# */)] DateTime pDate)
     {
-        var rslt = DateTime.Parse(""1900-01-01"");
-        var rslt2 = DateTime.Parse(""2002-08-13 12:14:00"");
+        var rslt = new DateTime(1900, 1, 1)/* 1900-01-01 */;
+        var rslt2 = new DateTime(2002, 8, 13, 12, 14, 0)/* 2002-08-13 12:14:00 */;
     }
 }");
     }
@@ -203,7 +203,7 @@ using System.Runtime.InteropServices;
 
 public partial class Issue213
 {
-    private static DateTime x = DateTime.Parse(""1990-01-01"");
+    private static DateTime x = new DateTime(1990, 1, 1)/* 1990-01-01 */;
 
     private void Y([Optional, DateTimeConstant(627667488000000000L/* Global.Issue213.x */)] DateTime opt)
     {
