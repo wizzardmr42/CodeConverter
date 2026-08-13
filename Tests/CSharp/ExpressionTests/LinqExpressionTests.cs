@@ -2422,6 +2422,39 @@ public static partial class M
     }
 
     [Fact]
+    public async Task UnaryMinusOnByteYieldsShortAsync()
+    {
+        // BMCore CourierServiceZone: `AddDeliveryDays(DeliverBy,
+        // -DeliveryInDays)` where DeliveryInDays is Byte and the parameter is
+        // Short. VB `-Byte` yields Short; C# promotes to int (CS1503).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+
+Public Module M
+    Public Function AddDeliveryDays(StartDate As Date, DaysToAdd As Short) As Date
+        Return StartDate.AddDays(DaysToAdd)
+    End Function
+
+    Public Function Back(d As Date, days As Byte) As Date
+        Return AddDeliveryDays(d, -days)
+    End Function
+End Module",
+            @"using System;
+
+public static partial class M
+{
+    public static DateTime AddDeliveryDays(DateTime StartDate, short DaysToAdd)
+    {
+        return StartDate.AddDays(DaysToAdd);
+    }
+
+    public static DateTime Back(DateTime d, byte days)
+    {
+        return AddDeliveryDays(d, (short)-days);
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

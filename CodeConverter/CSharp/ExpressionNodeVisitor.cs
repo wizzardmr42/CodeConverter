@@ -931,11 +931,23 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             expr = ValidSyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(enumUnderlying), expr.AddParens());
         }
 
-        return SyntaxFactory.PrefixUnaryExpression(
+        var unary = (ExpressionSyntax)SyntaxFactory.PrefixUnaryExpression(
             kind,
             SyntaxFactory.Token(csTokenKind),
             expr.AddParens()
         );
+
+        // VB unary minus on a small integral yields a SMALL type (`-Byte` is
+        // Short); C# promotes to int, so contexts typed by VB's result (an
+        // argument to a Short parameter) mismatch (CS1503). Cast back.
+        if (kind == SyntaxKind.UnaryMinusExpression
+            && _semanticModel.GetTypeInfo(node.Operand).Type?.SpecialType
+                is SpecialType.System_Byte or SpecialType.System_SByte or SpecialType.System_Int16 or SpecialType.System_UInt16
+            && _semanticModel.GetTypeInfo(node).Type is { SpecialType: not SpecialType.System_Int32 and not SpecialType.None } vbUnaryResult) {
+            unary = ValidSyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(vbUnaryResult), unary.AddParens());
+        }
+
+        return unary;
     }
 
     private async Task<ExpressionSyntax> NegateAndSimplifyOrNullAsync(VBSyntax.UnaryExpressionSyntax node, ExpressionSyntax expr, ITypeSymbol operandConvertedType)
