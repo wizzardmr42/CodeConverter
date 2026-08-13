@@ -1182,7 +1182,15 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         async Task<CatchFilterClauseSyntax> ConvertCatchFilterClauseAsync(VBasic.Syntax.CatchFilterClauseSyntax node)
         {
             if (node == null) return null;
-            return SyntaxFactory.CatchFilterClause(await node.Filter.AcceptAsync<ExpressionSyntax>(_expressionVisitor));
+            var filterExpr = await node.Filter.AcceptAsync<ExpressionSyntax>(_expressionVisitor);
+            // A `Catch ... When <Boolean?>` filter treats Nothing as False;
+            // C#'s `when` needs a plain bool (CS0266).
+            if (_semanticModel.GetTypeInfo(node.Filter).Type.IsNullable(out var filterUnderlying)
+                && filterUnderlying?.SpecialType == SpecialType.System_Boolean) {
+                filterExpr = SyntaxFactory.BinaryExpression(SyntaxKind.EqualsExpression,
+                    filterExpr.AddParens(), LiteralConversions.GetLiteralExpression(true));
+            }
+            return SyntaxFactory.CatchFilterClause(filterExpr);
         }
 
         async Task<FinallyClauseSyntax> ConvertFinallyBlockAsync(VBasic.Syntax.FinallyBlockSyntax node)

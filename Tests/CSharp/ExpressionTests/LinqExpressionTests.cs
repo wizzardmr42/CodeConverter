@@ -2379,6 +2379,49 @@ public static partial class M
     }
 
     [Fact]
+    public async Task CatchWhenNullableBoolFilterAppendsEqualsTrueAsync()
+    {
+        // BMCore WyattSkuTransferTask: `Catch ex When
+        // TryCast(...)?.StatusCode = 409` — the lifted comparison gives
+        // Boolean? (Nothing -> filter False); C#'s `when` needs bool.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+
+Public Class ApiEx
+    Inherits Exception
+    Public Property StatusCode As Integer
+End Class
+
+Public Module M
+    Public Sub Do1(work As Action)
+        Try
+            work()
+        Catch ex As Exception When TryCast(ex.InnerException, ApiEx)?.StatusCode = 409
+        End Try
+    End Sub
+End Module",
+            @"using System;
+
+public partial class ApiEx : Exception
+{
+    public int StatusCode { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(Action work)
+    {
+        try
+        {
+            work();
+        }
+        catch (Exception ex) when ((((ex.InnerException as ApiEx)?.StatusCode) is { } arg1 ? arg1 == 409 : null) == true)
+        {
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
