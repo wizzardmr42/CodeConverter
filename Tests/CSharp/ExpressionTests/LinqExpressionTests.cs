@@ -2095,7 +2095,7 @@ End Class",
 
 public partial class BaseC
 {
-    public NameValueCollection Values { get; private set; }
+    public NameValueCollection Values { get; }
 }
 
 public partial class C : BaseC
@@ -4161,7 +4161,7 @@ public partial interface IRule
 
 public partial class Impl : IRule
 {
-    public int? LocationID { get; private set; }
+    public int? LocationID { get; }
 }
 
 public static partial class M

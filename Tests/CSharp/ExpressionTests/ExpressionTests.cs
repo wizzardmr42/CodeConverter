@@ -1246,7 +1246,7 @@ internal partial class TestClass3
 {
     private partial class Rec
     {
-        public Rec Prop { get; private set; } = new Rec();
+        public Rec Prop { get; } = new Rec();
     }
     private Rec TestMethod(string str)
     {

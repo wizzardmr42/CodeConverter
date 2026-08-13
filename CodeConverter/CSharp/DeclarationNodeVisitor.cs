@@ -715,8 +715,15 @@ internal class DeclarationNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSh
 
             return methodDeclarationSyntaxs[0];
         } else {
-            bool allowPrivateAccessorForDirectAccess = node.Modifiers.All(m => !m.IsKind(VBasic.SyntaxKind.MustOverrideKeyword, VBasic.SyntaxKind.OverridesKeyword)) && 
+            bool allowPrivateAccessorForDirectAccess = node.Modifiers.All(m => !m.IsKind(VBasic.SyntaxKind.MustOverrideKeyword, VBasic.SyntaxKind.OverridesKeyword)) &&
                                                        node.GetAncestor<VBSyntax.InterfaceBlockSyntax>() == null;
+            // The private accessor is only needed when the VB code writes the
+            // auto-property's backing field (`_X`) outside a constructor. A
+            // gratuitous `private set;` is observable by reflection-based
+            // frameworks — EF6 maps { get; private set; } but NOT { get; } —
+            // so a ReadOnly auto-property must convert to a true get-only one
+            // unless `_X` is actually referenced.
+            allowPrivateAccessorForDirectAccess &= BackingFieldReferenced(propSymbol, node.Identifier.ValueText);
             accessors = ConvertSimpleAccessors(isWriteOnly, isReadonly, allowPrivateAccessorForDirectAccess, propSymbol.DeclaredAccessibility);
         }
 
@@ -929,6 +936,33 @@ internal class DeclarationNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSh
 
         additionalDeclarations.Add(realDecl);
         return csIdentifierName;
+    }
+
+    private readonly Dictionary<INamedTypeSymbol, HashSet<string>> _typeIdentifierCache = new(SymbolEqualityComparer.Default);
+
+    /// <summary>
+    /// True if the containing type (all partials) mentions the VB auto-property
+    /// backing field `_&lt;PropertyName&gt;`. Only then does the converted
+    /// auto-property need a private accessor for direct-access parity.
+    /// </summary>
+    private bool BackingFieldReferenced(IPropertySymbol propSymbol, string propertyName)
+    {
+        var containingType = propSymbol?.ContainingType;
+        if (containingType == null) return false;
+        if (!_typeIdentifierCache.TryGetValue(containingType, out var identifiers)) {
+            identifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var declRef in containingType.DeclaringSyntaxReferences) {
+                // VB type symbols declare via the header statement (`Class Foo` line);
+                // walk up to the containing block to see the members.
+                var syntax = declRef.GetSyntax();
+                if (syntax is VBSyntax.TypeStatementSyntax) syntax = syntax.Parent ?? syntax;
+                foreach (var tok in syntax.DescendantTokens()) {
+                    if (tok.IsKind(VBasic.SyntaxKind.IdentifierToken)) identifiers.Add(tok.ValueText);
+                }
+            }
+            _typeIdentifierCache[containingType] = identifiers;
+        }
+        return identifiers.Contains("_" + propertyName);
     }
 
     private static AccessorListSyntax ConvertSimpleAccessors(bool isWriteOnly, bool isReadonly,

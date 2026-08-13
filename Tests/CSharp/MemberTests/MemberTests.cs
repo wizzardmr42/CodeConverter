@@ -2202,7 +2202,7 @@ public partial interface IFoo
 public abstract partial class BaseFoo : IUserContext
 {
 
-    protected internal string ConnectedGroupID { get; private set; }
+    protected internal string ConnectedGroupID { get; }
     string IUserContext.GroupID { get => ConnectedGroupID; }
 
 }
@@ -3716,7 +3716,7 @@ public partial interface IBar
 public partial class Foo : IFoo, IBar
 {
 
-    public int ExplicitPropRenamed { get; private set; }
+    public int ExplicitPropRenamed { get; }
     int IFoo.ExplicitProp { get => ExplicitPropRenamed; }
     int IBar.ExplicitProp { get => ExplicitPropRenamed; }
 }");

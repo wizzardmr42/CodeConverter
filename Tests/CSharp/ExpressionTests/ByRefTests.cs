@@ -536,7 +536,7 @@ internal static partial class Module1
 
     public partial class TestClass
     {
-        public string Foo { get; private set; }
+        public string Foo { get; }
 
         public TestClass()
         {
@@ -944,8 +944,8 @@ using System.Linq;
 
 public partial class Holder
 {
-    public int A { get; private set; }
-    public int B { get; private set; }
+    public int A { get; }
+    public int B { get; }
     public Holder(ref int a, ref int b)
     {
         A = a;
