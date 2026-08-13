@@ -2234,6 +2234,47 @@ public static partial class M
     }
 
     [Fact]
+    public async Task FlagsEnumTruthyInOrElseConvertsToBooleanAsync()
+    {
+        // BMCore HeartBeat: `If Not (Server.Role And Main OrElse Server.Role
+        // And Test)` — each flags-And result is used as a truthy value.
+        // The enum==enum omit-conversion guard wrongly suppressed the
+        // Boolean conversion for OrElse operands (CS0019 `||` on enums).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+
+<Flags>
+Public Enum Role
+    None = 0
+    Main = 1
+    Test = 2
+End Enum
+
+Public Module M
+    Public Function IsMainOrTest(r As Role) As Boolean
+        Return (r And Role.Main) OrElse (r And Role.Test)
+    End Function
+End Module",
+            @"using System;
+using Microsoft.VisualBasic.CompilerServices; // Install-Package Microsoft.VisualBasic
+
+[Flags]
+public enum Role
+{
+    None = 0,
+    Main = 1,
+    Test = 2
+}
+
+public static partial class M
+{
+    public static bool IsMainOrTest(Role r)
+    {
+        return Conversions.ToBoolean(r & Role.Main) || Conversions.ToBoolean(r & Role.Test);
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

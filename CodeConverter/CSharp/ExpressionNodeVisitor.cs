@@ -1064,6 +1064,11 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         omitConversion |= lhsTypeIgnoringNullable != null && rhsTypeIgnoringNullable != null &&
                           lhsTypeIgnoringNullable.IsEnumType() && SymbolEqualityComparer.Default.Equals(lhsTypeIgnoringNullable, rhsTypeIgnoringNullable)
                           && !node.IsKind(VBasic.SyntaxKind.AddExpression, VBasic.SyntaxKind.SubtractExpression, VBasic.SyntaxKind.MultiplyExpression, VBasic.SyntaxKind.DivideExpression, VBasic.SyntaxKind.IntegerDivideExpression, VBasic.SyntaxKind.ModuloExpression)
+                          // `flagsA OrElse flagsB` uses each enum operand as a
+                          // TRUTHY value (non-zero = True) — the Boolean
+                          // conversion must not be suppressed (CS0019 `||` on
+                          // enums).
+                          && !node.IsKind(VBasic.SyntaxKind.OrElseExpression, VBasic.SyntaxKind.AndAlsoExpression)
                           && forceLhsTargetType == null;
         // VB permits `decimal <op> double` etc. via numeric widening; C# does
         // not (CS0019 "operator '+' cannot be applied to operands of type
