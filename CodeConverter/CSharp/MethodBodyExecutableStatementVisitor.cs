@@ -324,9 +324,12 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
             // rhs ConvertedType as the lhs type (the final narrowing), hiding
             // the floating operand that forces the promotion.
             var rhsOpType = rhsTypeInfo.Type ?? rhsTypeInfo.ConvertedType;
+            // A String rhs also routes through Double (VB string arithmetic),
+            // so it forces the same lhs promotion as a floating rhs.
             if ((lhsUnderlying ?? lhsOperandType)?.SpecialType == SpecialType.System_Decimal
-                && rhsOpType?.SpecialType is SpecialType.System_Double or SpecialType.System_Single) {
-                var promotedType = _semanticModel.Compilation.GetSpecialType(rhsOpType.SpecialType);
+                && rhsOpType?.SpecialType is SpecialType.System_Double or SpecialType.System_Single or SpecialType.System_String) {
+                var promotedType = _semanticModel.Compilation.GetSpecialType(
+                    rhsOpType.SpecialType == SpecialType.System_String ? SpecialType.System_Double : rhsOpType.SpecialType);
                 ITypeSymbol castTarget = lhsIsNullable
                     ? _semanticModel.Compilation.GetSpecialType(SpecialType.System_Nullable_T).Construct(promotedType)
                     : promotedType;

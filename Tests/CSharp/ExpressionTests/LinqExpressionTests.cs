@@ -2215,6 +2215,12 @@ Public Module M
         c.Value = (c.Value / 100).ToString()
         c.Value /= 100
     End Sub
+
+    Public Function Sum1(c As Cell) As Decimal
+        Dim Total As Decimal = 0
+        Total += c.Value
+        Return Total
+    End Function
 End Module",
             @"using Microsoft.VisualBasic.CompilerServices; // Install-Package Microsoft.VisualBasic
 
@@ -2229,6 +2235,13 @@ public static partial class M
     {
         c.Value = (Conversions.ToDouble(c.Value) / 100d).ToString();
         c.Value = (Conversions.ToDouble(c.Value) / 100d).ToString();
+    }
+
+    public static decimal Sum1(Cell c)
+    {
+        decimal Total = 0m;
+        Total = (decimal)((double)Total + Conversions.ToDouble(c.Value));
+        return Total;
     }
 }");
     }
