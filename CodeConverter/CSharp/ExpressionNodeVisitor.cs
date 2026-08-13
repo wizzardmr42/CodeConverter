@@ -277,6 +277,16 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
 
     public override async Task<CSharpSyntaxNode> VisitGetTypeExpression(VBasic.Syntax.GetTypeExpressionSyntax node)
     {
+        // `GetType(Nullable(Of ))` — an UNBOUND generic. The normal type
+        // conversion special-cases Nullable to `T?` and mangles this into
+        // `typeof(object?)` (CS8639). Emit the C# unbound form
+        // `typeof(System.Nullable<>)`.
+        if (_semanticModel.GetSymbolInfo(node.Type).Symbol is INamedTypeSymbol { IsUnboundGenericType: true } unboundGeneric) {
+            var ns = unboundGeneric.ContainingNamespace?.ToDisplayString();
+            var unboundName = (string.IsNullOrEmpty(ns) ? "" : ns + ".") + unboundGeneric.Name
+                              + "<" + new string(',', Math.Max(0, unboundGeneric.Arity - 1)) + ">";
+            return SyntaxFactory.TypeOfExpression(SyntaxFactory.ParseTypeName(unboundName));
+        }
         return SyntaxFactory.TypeOfExpression(await node.Type.AcceptAsync<TypeSyntax>(TriviaConvertingExpressionVisitor));
     }
 

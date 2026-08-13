@@ -2557,6 +2557,30 @@ public static partial class M
     }
 
     [Fact]
+    public async Task GetTypeOfUnboundNullableGenericAsync()
+    {
+        // BMCore SalesMatrixModels: `t.GetGenericTypeDefinition Is
+        // GetType(Nullable(Of ))` — the unbound generic mangled into
+        // `typeof(object?)` (CS8639).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+
+Public Module M
+    Public Function IsNullableEnum(t As Type) As Boolean
+        Return t.IsGenericType AndAlso t.GetGenericTypeDefinition Is GetType(Nullable(Of )) AndAlso t.GetGenericArguments(0).IsEnum
+    End Function
+End Module",
+            @"using System;
+
+public static partial class M
+{
+    public static bool IsNullableEnum(Type t)
+    {
+        return t.IsGenericType && ReferenceEquals(t.GetGenericTypeDefinition(), typeof(Nullable<>)) && t.GetGenericArguments()[0].IsEnum;
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
