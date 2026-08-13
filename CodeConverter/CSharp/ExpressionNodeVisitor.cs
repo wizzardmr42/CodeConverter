@@ -1652,6 +1652,17 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                             // the smaller declared type; C# needs the cast.
                             csNode = ValidSyntaxFactory.CastExpression(
                                 CommonConversions.GetTypeSyntax(delegateReturn), csNode.AddParens());
+                        } else if (bodyType is IArrayTypeSymbol bodyArray
+                                   && delegateReturn is IArrayTypeSymbol returnArray
+                                   && returnArray.ElementType is INamedTypeSymbol { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } arrayEnumUnderlying }
+                                   && SymbolEqualityComparer.Default.Equals(arrayEnumUnderlying, bodyArray.ElementType)) {
+                            // `porr => porr.RemoveAfterStatuses` (Byte()) for a
+                            // PurchaseOrderStatus()-returning delegate — the CLR
+                            // treats an enum array and its underlying-type array
+                            // as the same runtime type; C# needs the identity
+                            // laundered through object (CS0029/CS1662).
+                            csNode = ValidSyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(delegateReturn),
+                                ValidSyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(_semanticModel.Compilation.GetSpecialType(SpecialType.System_Object)), csNode.AddParens()));
                         }
                     }
                     var expressionBodyStatement = SyntaxFactory.ExpressionStatement(csNode);

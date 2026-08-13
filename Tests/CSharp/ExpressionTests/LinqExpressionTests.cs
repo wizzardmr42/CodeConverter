@@ -2581,6 +2581,59 @@ public static partial class M
     }
 
     [Fact]
+    public async Task EnumArrayLambdaReturnFromUnderlyingArrayAsync()
+    {
+        // BMCore PurchaseOrderReminderRule: `Function(porr)
+        // porr.RemoveAfterStatuses` (a Byte() column) for an Expression(Of
+        // Func(Of _, PurchaseOrderStatus())) — the CLR treats an enum array
+        // and its underlying-type array as the same runtime type; C# launders
+        // the identity through object.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Linq.Expressions
+
+Public Enum Status As Byte
+    Draft = 0
+    Sent = 1
+End Enum
+
+Public Class Porr
+    Public Property RemoveAfterStatuses As Byte()
+End Class
+
+Public Module M
+    Public ReadOnly Property StatusesExpression As Expression(Of Func(Of Porr, Status()))
+        Get
+            Return Function(porr) porr.RemoveAfterStatuses
+        End Get
+    End Property
+End Module",
+            @"using System;
+using System.Linq.Expressions;
+
+public enum Status : byte
+{
+    Draft = 0,
+    Sent = 1
+}
+
+public partial class Porr
+{
+    public byte[] RemoveAfterStatuses { get; set; }
+}
+
+public static partial class M
+{
+    public static Expression<Func<Porr, Status[]>> StatusesExpression
+    {
+        get
+        {
+            return porr => (Status[])(object)porr.RemoveAfterStatuses;
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
