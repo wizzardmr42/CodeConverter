@@ -1882,6 +1882,14 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 }
                 attributes.Insert(0,
                     SyntaxFactory.AttributeList(SyntaxFactory.SeparatedList(optionalAttributes)));
+            } else if (vbSymbol is { HasExplicitDefaultValue: true, Type.SpecialType: SpecialType.System_Decimal }
+                       && vbSymbol.ExplicitDefaultValue is decimal decimalDefault) {
+                // Emit from the SYMBOL's constant, not the source text: VB
+                // normalizes the literal through its own conversion (e.g.
+                // `= 0.00` stores a scale-0 decimal in DecimalConstantAttribute),
+                // and the default's scale is baked into caller metadata.
+                @default = SyntaxFactory.EqualsValueClause(SyntaxFactory.LiteralExpression(
+                    SyntaxKind.NumericLiteralExpression, SyntaxFactory.Literal(decimalDefault)));
             } else {
                 @default = SyntaxFactory.EqualsValueClause(
                     await node.Default.Value.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor));
