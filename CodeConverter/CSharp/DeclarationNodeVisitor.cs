@@ -530,7 +530,10 @@ internal class DeclarationNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSh
             if (variablesDecl.Type?.SpecialType == SpecialType.System_DateTime) {
                 var index = thisFieldModifiers.IndexOf(CSSyntaxKind.ConstKeyword);
                 if (index >= 0) {
-                    thisFieldModifiers = thisFieldModifiers.Replace(thisFieldModifiers[index], SyntaxFactory.Token(CSSyntaxKind.StaticKeyword));
+                    // C# has no const DateTime; static READONLY preserves the
+                    // VB Const's immutability (a bare static field is mutable).
+                    thisFieldModifiers = thisFieldModifiers.Replace(thisFieldModifiers[index], SyntaxFactory.Token(CSSyntaxKind.StaticKeyword))
+                        .Insert(index + 1, SyntaxFactory.Token(CSSyntaxKind.ReadOnlyKeyword));
                 }
             }
 
