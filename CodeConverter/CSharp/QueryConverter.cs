@@ -433,6 +433,12 @@ internal class QueryConverter
                                     // Same as CreateGroupByProjectionAsync's arg handling,
                                     // but here in the let-emission path.
                                     var argBody = await fa.Argument.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+                                    if (liveNames.Count > 1) {
+                                        // Multi-var group element `{sl, Amount}` —
+                                        // the arg's bare references need
+                                        // qualifying with the lambda parameter.
+                                        argBody = (CSSyntax.ExpressionSyntax)new QualifyAnonMembersRewriter(reusableCsFromId.ValueText, liveNames).Visit(argBody);
+                                    }
                                     var lambdaParam = SyntaxFactory.Parameter(reusableCsFromId);
                                     var lambda = SyntaxFactory.SimpleLambdaExpression(lambdaParam, argBody);
                                     aggExpr = SyntaxFactory.InvocationExpression(invocationTarget,
@@ -479,7 +485,7 @@ internal class QueryConverter
                     // `IGrouping<K,T>` where `.k1` / `.Group` aren't valid. Add a
                     // `into @group select new { @group.Key.k1, @group.Key.k2,
                     // Group = @group }` continuation to restore the shape.
-                    var projectionSelect = await CreateGroupByProjectionAsync(gcs, GetGroupIdentifier(gcs), reusableCsFromId);
+                    var projectionSelect = await CreateGroupByProjectionAsync(gcs, GetGroupIdentifier(gcs), reusableCsFromId, liveNames);
                     queryContinuation = CreateGroupByContinuation(gcs, continuationClauses, projectionSelect);
                 }
                 break;
@@ -762,7 +768,7 @@ internal class QueryConverter
         return gcs.AggregationVariables.Any();
     }
 
-    private async Task<CSSyntax.SelectClauseSyntax> CreateGroupByProjectionAsync(VBSyntax.GroupByClauseSyntax gcs, SyntaxToken groupName, SyntaxToken rangeVariableName)
+    private async Task<CSSyntax.SelectClauseSyntax> CreateGroupByProjectionAsync(VBSyntax.GroupByClauseSyntax gcs, SyntaxToken groupName, SyntaxToken rangeVariableName, IReadOnlyList<string> liveNames)
     {
         var groupIdName = ValidSyntaxFactory.IdentifierName(groupName);
         var keyAccess = SyntaxFactory.MemberAccessExpression(
@@ -825,6 +831,11 @@ internal class QueryConverter
                     // on IGrouping<K,T> where T isn't numeric — CS1929.
                     if (fa.Argument != null) {
                         var argBody = await fa.Argument.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+                        if (liveNames.Count > 1) {
+                            // Multi-var group element — qualify bare references
+                            // with the lambda parameter.
+                            argBody = (CSSyntax.ExpressionSyntax)new QualifyAnonMembersRewriter(rangeVariableName.ValueText, liveNames).Visit(argBody);
+                        }
                         var lambdaParam = SyntaxFactory.Parameter(rangeVariableName);
                         var lambda = SyntaxFactory.SimpleLambdaExpression(lambdaParam, argBody);
                         aggExpr = SyntaxFactory.InvocationExpression(invocationTarget,

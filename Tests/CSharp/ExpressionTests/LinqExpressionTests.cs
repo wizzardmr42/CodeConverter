@@ -2468,6 +2468,59 @@ public static partial class M
     }
 
     [Fact]
+    public async Task GroupByMultiVarElementQualifiesAggregationArgsAsync()
+    {
+        // BMCore ProfitCalculator: `From sl In ... Let Amount = ... Group By
+        // key Into Total = Sum(Amount), Qty = Sum(sl.Quantity)` — the group
+        // element is the transparent {sl, Amount}; the aggregation-arg
+        // lambdas must qualify their bare references (`x => x.Amount`,
+        // `x => x.sl.Quantity`), or CS0103/CS1061.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Sl
+    Public Property Key As Integer
+    Public Property Gross As Decimal
+    Public Property Quantity As Integer
+End Class
+
+Public Module M
+    Public Sub Do1(sls As List(Of Sl))
+        Dim summaries = (From sl In sls
+                         Let Amount = sl.Gross * 2
+                         Group By sl.Key Into Total = Sum(Amount), Qty = Sum(sl.Quantity)).ToList()
+        For Each s In summaries
+            System.Console.WriteLine($""{s.Key} {s.Total} {s.Qty}"")
+        Next
+    End Sub
+End Module",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Sl
+{
+    public int Key { get; set; }
+    public decimal Gross { get; set; }
+    public int Quantity { get; set; }
+}
+
+public static partial class M
+{
+    public static void Do1(List<Sl> sls)
+    {
+        var summaries = (from sl in sls
+                         let Amount = sl.Gross * 2m
+                         group new { sl, Amount } by sl.Key into Group
+                         let Key = Group.Key
+                         select new { Group.Key, Total = Group.Sum(sl => sl.Amount), Qty = Group.Sum(sl => sl.sl.Quantity) }).ToList();
+        foreach (var s in summaries)
+            Console.WriteLine($""{s.Key} {s.Total} {s.Qty}"");
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
