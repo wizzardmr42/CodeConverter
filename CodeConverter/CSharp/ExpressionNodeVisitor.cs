@@ -1572,10 +1572,21 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                         if (bodyIsNullable && underlying != null && delegateReturn != null &&
                             SymbolEqualityComparer.Default.Equals(delegateReturn, underlying)) {
                             bool inExpressionTree = isExpressionTreeLambda || TriviaConvertingExpressionVisitor.IsWithinQuery;
+                            // In expression trees, LIFTED comparison/logical
+                            // bodies already emit plain bool (pattern
+                            // transforms suppressed) — leave those alone. A
+                            // genuinely bool?-typed body (bare nullable
+                            // property like `clc.IsActive`) still needs
+                            // `== true` — which IS tree-safe.
+                            bool bodyIsLiftedOperator = (node.Body as VBSyntax.ExpressionSyntax)?.SkipIntoParens() is VBSyntax.BinaryExpressionSyntax or VBSyntax.UnaryExpressionSyntax;
+                            if (underlying.SpecialType == SpecialType.System_Boolean && inExpressionTree && !bodyIsLiftedOperator) {
+                                csNode = SyntaxFactory.BinaryExpression(SyntaxKind.EqualsExpression,
+                                    csNode.AddParens(), LiteralConversions.GetLiteralExpression(true));
+                            }
                             ExpressionSyntax defaultLiteral = underlying.SpecialType switch {
                                 SpecialType.System_Boolean when !inExpressionTree
                                     => LiteralConversions.GetLiteralExpression(false),
-                                SpecialType.System_Boolean => null, // bool? in expression-tree — skip (see comment above)
+                                SpecialType.System_Boolean => null, // bool? in expression-tree — handled above or already bool
                                 // A bare `default` literal is illegal inside an
                                 // expression tree (CS8507) — use the typed form.
                                 _ when underlying.IsNumericType() && inExpressionTree

@@ -2521,6 +2521,42 @@ public static partial class M
     }
 
     [Fact]
+    public async Task NullableBoolPropertyLambdaInQueryableWhereGetsEqualsTrueAsync()
+    {
+        // BMCore ExtendedPropertyListUtil: `.Where(Function(clc)
+        // clc.IsActive)` over an IQueryable where IsActive is Boolean? —
+        // a bare nullable property body (not a lifted comparison) stays
+        // bool? in the expression tree; `== true` is the tree-safe unwrap.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Linq
+
+Public Class Clc
+    Public Property IsActive As Boolean?
+    Public Property Name As String
+End Class
+
+Public Module M
+    Public Function ActiveNames(src As IQueryable(Of Clc)) As IQueryable(Of String)
+        Return src.Where(Function(clc) clc.IsActive).Select(Function(clc) clc.Name)
+    End Function
+End Module",
+            @"using System.Linq;
+
+public partial class Clc
+{
+    public bool? IsActive { get; set; }
+    public string Name { get; set; }
+}
+
+public static partial class M
+{
+    public static IQueryable<string> ActiveNames(IQueryable<Clc> src)
+    {
+        return src.Where(clc => clc.IsActive == true).Select(clc => clc.Name);
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
