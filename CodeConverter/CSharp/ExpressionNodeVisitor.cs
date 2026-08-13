@@ -711,7 +711,14 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         }
 
         bool hasExpressionToInferTypeFrom = node.Initializers.SelectMany(n => n.DescendantNodesAndSelf()).Any(n => n is not VBasic.Syntax.CollectionInitializerSyntax);
-        if (hasExpressionToInferTypeFrom) {
+        // VB array literals take the DOMINANT type — `{MakeDelete(), New
+        // CreateThing}` with sibling subclasses infers the common base. C#'s
+        // `new[]` requires a best common type among the elements (CS0826), so
+        // spell the element type out when reference-typed elements differ
+        // from it.
+        bool needsExplicitElementType = elementType.IsReferenceType && node.Initializers.Any(i =>
+            _semanticModel.GetTypeInfo(i).Type is { } initType && !SymbolEqualityComparer.Default.Equals(initType, elementType));
+        if (hasExpressionToInferTypeFrom && !needsExplicitElementType) {
             var commas = Enumerable.Repeat(SyntaxFactory.Token(SyntaxKind.CommaToken), dimensions - 1);
             return SyntaxFactory.ImplicitArrayCreationExpression(SyntaxFactory.TokenList(commas), initializer);
         }
