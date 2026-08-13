@@ -843,8 +843,22 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             if (leftUnderlying.TypeKind == TypeKind.Enum &&
                 rightType != null && rightType.SpecialType != SpecialType.None &&
                 !SymbolEqualityComparer.Default.Equals(rightType, leftUnderlying)) {
-                var typeName = (TypeSyntax)CommonConversions.CsSyntaxGenerator.TypeExpression(leftUnderlying);
-                rightForBinary = ValidSyntaxFactory.CastExpression(typeName, rightSide);
+                // `If(byteEnum?, 999)` — a constant fallback that OVERFLOWS
+                // the enum's underlying type can't be cast to the enum
+                // (CS0221); convert the enum side to the fallback's type
+                // instead: `(int?)x ?? 999`.
+                var enumUnderlyingSpecial = (leftUnderlying as INamedTypeSymbol)?.EnumUnderlyingType?.SpecialType ?? SpecialType.None;
+                var rhsConst = _semanticModel.GetConstantValue(node.SecondExpression);
+                if (rhsConst.HasValue && rhsConst.Value is IConvertible conv && !FitsInSpecialType(conv, enumUnderlyingSpecial)) {
+                    var nullableRight = _semanticModel.Compilation
+                        .GetSpecialType(SpecialType.System_Nullable_T).Construct(rightType);
+                    leftForBinary = ValidSyntaxFactory.CastExpression(
+                        CommonConversions.GetTypeSyntax(nullableRight),
+                        node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide));
+                } else {
+                    var typeName = (TypeSyntax)CommonConversions.CsSyntaxGenerator.TypeExpression(leftUnderlying);
+                    rightForBinary = ValidSyntaxFactory.CastExpression(typeName, rightSide);
+                }
             } else if (rhsIsString && !underlyingIsString) {
                 // Rewrite `x ?? "default"` (x is `T?`) to `x?.ToString() ?? "default"`.
                 var toStringCall = SyntaxFactory.InvocationExpression(
@@ -2115,6 +2129,24 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     // The correct rule: the node is a sub part ONLY if it's reached via the
     // WhenNotNull side of a `?.` — the LHS/Expression side still needs the With
     // substitution.
+    private static bool FitsInSpecialType(IConvertible value, SpecialType target)
+    {
+        try {
+            long v = value.ToInt64(System.Globalization.CultureInfo.InvariantCulture);
+            return target switch {
+                SpecialType.System_Byte => v is >= byte.MinValue and <= byte.MaxValue,
+                SpecialType.System_SByte => v is >= sbyte.MinValue and <= sbyte.MaxValue,
+                SpecialType.System_Int16 => v is >= short.MinValue and <= short.MaxValue,
+                SpecialType.System_UInt16 => v is >= ushort.MinValue and <= ushort.MaxValue,
+                SpecialType.System_Int32 => v is >= int.MinValue and <= int.MaxValue,
+                SpecialType.System_UInt32 => v is >= uint.MinValue and <= uint.MaxValue,
+                _ => true
+            };
+        } catch (OverflowException) {
+            return false;
+        }
+    }
+
     private static bool IsEnumerableOfXElement(ITypeSymbol type)
     {
         if (type == null || type.Name == nameof(System.Xml.Linq.XElement)) return false;

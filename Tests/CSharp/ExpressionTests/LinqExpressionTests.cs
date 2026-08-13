@@ -2275,6 +2275,47 @@ public static partial class M
     }
 
     [Fact]
+    public async Task EnumCoalesceWithOverflowingConstantCastsLhsAsync()
+    {
+        // BMContext.Caching: `If(eps.Recorded, 999)` where the enum's
+        // underlying type is Byte — 999 can't cast to the enum (CS0221);
+        // convert the enum side to the fallback's type instead.
+        await TestConversionVisualBasicToCSharpAsync(@"Public Enum Recorded As Byte
+    No = 0
+    Yes = 1
+End Enum
+
+Public Class Eps
+    Public Property Recorded As Recorded?
+End Class
+
+Public Module M
+    Public Function SortKey(eps As Eps) As Integer
+        Return If(eps.Recorded, 999)
+    End Function
+End Module",
+            @"
+public enum Recorded : byte
+{
+    No = 0,
+    Yes = 1
+}
+
+public partial class Eps
+{
+    public Recorded? Recorded { get; set; }
+}
+
+public static partial class M
+{
+    public static int SortKey(Eps eps)
+    {
+        return (int?)eps.Recorded ?? 999;
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...
