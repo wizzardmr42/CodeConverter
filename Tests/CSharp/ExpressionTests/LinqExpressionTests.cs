@@ -2041,6 +2041,167 @@ public partial class C
     }
 
     [Fact]
+    public async Task MetadataIndexerAccessedViaPropertyChainAsync()
+    {
+        // BMCore SMInternalControllerBase: `Request.Cookies(name)` — Cookies
+        // is a property returning a collection whose C# indexer is VB's
+        // default property. Repro with a framework type: NameValueCollection.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Specialized
+
+Public Class Holder
+    Public Property Values As NameValueCollection
+End Class
+
+Public Module M
+    Public Function Get1(h As Holder, name As String) As String
+        Return h.Values(name)
+    End Function
+End Module",
+            @"using System.Collections.Specialized;
+
+public partial class Holder
+{
+    public NameValueCollection Values { get; set; }
+}
+
+public static partial class M
+{
+    public static string Get1(Holder h, string name)
+    {
+        return h.Values[name];
+    }
+}");
+    }
+
+    [Fact]
+    public async Task MetadataIndexerViaInheritedPropertyAsync()
+    {
+        // The BMCore Cookies shape precisely: the collection-returning
+        // property is INHERITED and accessed with an implicit receiver.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Specialized
+
+Public Class BaseC
+    Public ReadOnly Property Values As NameValueCollection
+End Class
+
+Public Class C
+    Inherits BaseC
+    Public Function Get1(name As String) As String
+        Dim v As String = Values(name)
+        Return v
+    End Function
+End Class",
+            @"using System.Collections.Specialized;
+
+public partial class BaseC
+{
+    public NameValueCollection Values { get; private set; }
+}
+
+public partial class C : BaseC
+{
+    public string Get1(string name)
+    {
+        string v = Values[name];
+        return v;
+    }
+}");
+    }
+
+    [Fact]
+    public async Task LambdaIntegralBodyNarrowsToSmallerDelegateReturnAsync()
+    {
+        // BMCore GlobalSettings: `Function(gs) 100 - (gs.FastPct +
+        // gs.MediumPct)` for an Expression(Of Func(Of _, Byte)) — Byte
+        // arithmetic widens to Integer, and VB narrows back to the Byte
+        // return. C# needs the cast (CS1662/CS0266).
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Linq.Expressions
+
+Public Class Gs
+    Public Property FastPct As Byte
+    Public Property MediumPct As Byte
+End Class
+
+Public Module M
+    Public ReadOnly Property SlowPctExpression As Expression(Of Func(Of Gs, Byte))
+        Get
+            Return Function(gs) 100 - (gs.FastPct + gs.MediumPct)
+        End Get
+    End Property
+End Module",
+            @"using System;
+using System.Linq.Expressions;
+
+public partial class Gs
+{
+    public byte FastPct { get; set; }
+    public byte MediumPct { get; set; }
+}
+
+public static partial class M
+{
+    public static Expression<Func<Gs, byte>> SlowPctExpression
+    {
+        get
+        {
+            return gs => (byte)(100 - (gs.FastPct + gs.MediumPct));
+        }
+    }
+}");
+    }
+
+    [Fact]
+    public async Task NullableRoundPatternParenthesizesTernarySourceAsync()
+    {
+        // BMCore GoodsInItem: `If(cond, <decimal? Sum>, 0)` narrowing to
+        // Integer? — the Math.Round-when-not-null pattern bound its
+        // `is {} argN` to just the ternary's FALSE branch
+        // (`cond ? sum : 0m is {} arg1 ? ...`), collapsing the result type.
+        // The source expression must be parenthesized first.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Itm
+    Public Property Qty As Decimal?
+End Class
+
+Public Class C
+    Public Property HasParent As Boolean
+    Public Property Items As List(Of Itm)
+
+    Public ReadOnly Property TotalQty As Integer?
+        Get
+            Return If(HasParent, Items.Sum(Function(i) i.Qty), 0)
+        End Get
+    End Property
+End Class",
+            @"using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public partial class Itm
+{
+    public decimal? Qty { get; set; }
+}
+
+public partial class C
+{
+    public bool HasParent { get; set; }
+    public List<Itm> Items { get; set; }
+
+    public int? TotalQty
+    {
+        get
+        {
+            return (HasParent ? Items.Sum(i => i.Qty) : 0m) is { } arg1 ? (int?)Math.Round(arg1) : null;
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task SelectWithRetainedRangeVarWorksWhenBareIdentifierIsNotFirstAsync()
     {
         // Same transparency preservation as SelectWithRetainedRangeVar...

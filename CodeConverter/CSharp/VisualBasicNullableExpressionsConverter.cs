@@ -37,6 +37,11 @@ internal class VisualBasicNullableExpressionsConverter
 
     public ExpressionSyntax InvokeConversionWhenNotNull(VBSyntax.ExpressionSyntax vbExpr, ExpressionSyntax csExpr, MemberAccessExpressionSyntax conversionMethod, TypeSyntax castType)
     {
+        // A low-precedence source expression (ternary, coalesce) must be
+        // parenthesized before the `is {} argN` pattern binds to it —
+        // otherwise `cond ? a : b is {} arg1 ? ... : null` re-associates
+        // (the pattern grabs just `b`) and the result type collapses.
+        csExpr = csExpr.AddParens();
         var hasValueCheck = HasValue(vbExpr, ref csExpr);
         var arguments = SyntaxFactory.ArgumentList(SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Argument(csExpr)));
         ExpressionSyntax invocation = SyntaxFactory.InvocationExpression(conversionMethod, arguments);

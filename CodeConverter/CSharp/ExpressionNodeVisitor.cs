@@ -1585,6 +1585,14 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                             // `(int?)Math.Round(...)` — expression-tree safe.
                             csNode = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
                                 (VBSyntax.ExpressionSyntax)node.Body, csNode, forceTargetType: delegateReturn);
+                        } else if (bodyType != null && delegateReturn != null
+                                   && !SymbolEqualityComparer.Default.Equals(bodyType, delegateReturn)
+                                   && bodyType.IsIntegralType() && delegateReturn.IsIntegralType()) {
+                            // `gs => 100 - (byteA + byteB)` for a byte-returning
+                            // delegate — VB narrows Integer arithmetic back to
+                            // the smaller declared type; C# needs the cast.
+                            csNode = ValidSyntaxFactory.CastExpression(
+                                CommonConversions.GetTypeSyntax(delegateReturn), csNode.AddParens());
                         }
                     }
                     var expressionBodyStatement = SyntaxFactory.ExpressionStatement(csNode);
