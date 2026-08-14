@@ -884,6 +884,17 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 leftForBinary = SyntaxFactory.ConditionalAccessExpression(
                     node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide),
                     toStringCall);
+            } else if (rightType != null && !SymbolEqualityComparer.Default.Equals(rightType, leftUnderlying)
+                       && (leftUnderlying.IsNumericType() || leftUnderlying.SpecialType == SpecialType.System_Boolean
+                           || leftUnderlying.SpecialType == SpecialType.System_DateTime || leftUnderlying.SpecialType == SpecialType.System_Char)) {
+                // VB target-types the fallback to the left operand's underlying type:
+                // `Dim d As Decimal? = If(maybeDecimal, 0.00)` — that 0.00 is a Double
+                // literal in VB source but becomes Decimal. Emitting it verbatim gave
+                // `decimal? ?? 0.00d` (CS0019). Also covers DBNull/bool/other fallbacks
+                // that VB converts implicitly. Convert the fallback to the underlying
+                // type so the two `??` operands share one.
+                rightForBinary = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+                    node.SecondExpression, rightSide, forceTargetType: leftUnderlying);
             }
         }
         var expr = SyntaxFactory.BinaryExpression(SyntaxKind.CoalesceExpression, leftForBinary, rightForBinary);

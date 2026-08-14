@@ -72,7 +72,9 @@ internal class CommonConversions
         // the declared type out — but only when it bound to a real type;
         // a semantic gap leaves the local as Object, and `object q` is
         // worse than var.
-        bool preferExplicitTypeForTrivialQueryInit = vbInitValue is VBSyntax.QueryExpressionSyntax { Clauses: { Count: 1 } trivialClauses } && trivialClauses[0] is VBSyntax.FromClauseSyntax;
+        // SkipIntoParens: `Dim q = (From x In src)` is every bit as trivial as the
+        // unparenthesised form, and the parenthesised spelling is common in practice.
+        bool preferExplicitTypeForTrivialQueryInit = vbInitValue?.SkipIntoParens() is VBSyntax.QueryExpressionSyntax { Clauses: { Count: 1 } trivialClauses } && trivialClauses[0] is VBSyntax.FromClauseSyntax;
         IMethodSymbol initSymbol = null;
         if (vbInitValue != null) {
             TypeInfo expType = vbInitializerTypeInfo.Value;
