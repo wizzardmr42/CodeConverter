@@ -347,6 +347,25 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
             return GetPostAssignmentStatements(node).Insert(0, SyntaxFactory.ExpressionStatement(lateBoundAssignment));
         }
 
+        // `q &= part` where the type declares its own `Operator &` is not string
+        // concatenation, and C# has no `&=` for it. Rewrite as an explicit call to
+        // the operator method: `q = T.op_Concatenate(q, part)` for a metadata type,
+        // or `q = q + part` once the declaration has been converted to `operator +`.
+        // Emitting `q += part` produced CS0019 on the type.
+        if (node.IsKind(VBasic.SyntaxKind.ConcatenateAssignmentStatement)
+            && _semanticModel.GetSymbolInfo(node).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } concatOp
+            && concatOp.Name == WellKnownMemberNames.ConcatenateOperatorName) {
+            ExpressionSyntax concatCall = concatOp.ContainingType.IsDefinedInSource()
+                ? SyntaxFactory.BinaryExpression(SyntaxKind.AddExpression, lhs, rhs)
+                : SyntaxFactory.InvocationExpression(
+                    SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                        CommonConversions.GetTypeSyntax(concatOp.ContainingType),
+                        SyntaxFactory.IdentifierName(WellKnownMemberNames.ConcatenateOperatorName)),
+                    ExpressionSyntaxExtensions.CreateArgList(lhs, rhs));
+            var concatAssignment = SyntaxFactory.AssignmentExpression(SyntaxKind.SimpleAssignmentExpression, lhs, concatCall);
+            return GetPostAssignmentStatements(node).Insert(0, SyntaxFactory.ExpressionStatement(concatAssignment));
+        }
+
         // Split out compound operator if type conversion needed on result
         if (TypeConversionAnalyzer.GetNonCompoundOrNull(kind) is {} nonCompound) {
 

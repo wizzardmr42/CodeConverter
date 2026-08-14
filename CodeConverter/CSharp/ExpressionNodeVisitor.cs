@@ -1107,6 +1107,37 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         return csLhs;
     }
 
+    /// <summary>
+    /// The `Operator &amp;` a VB `&amp;` binds to, when it is a user-defined one rather
+    /// than string concatenation. Null for ordinary string concatenation.
+    /// </summary>
+    private IMethodSymbol GetUserDefinedConcatOperator(VBSyntax.BinaryExpressionSyntax node) =>
+        _semanticModel.SyntaxTree == node.SyntaxTree &&
+        _semanticModel.GetSymbolInfo(node).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op &&
+        op.Name == WellKnownMemberNames.ConcatenateOperatorName
+            ? op : null;
+
+    /// <summary>
+    /// C# has no `&amp;` concatenation operator. When the VB operator is declared in
+    /// source we convert its declaration to `operator +`, so the call site can use
+    /// `+`. When it comes from metadata (an already-compiled VB assembly such as
+    /// MoreInput.Data) it stays `op_Concatenate` — which is NOT one of C#'s operator
+    /// names, so Roslyn treats it as an ordinary static method and it can simply be
+    /// called by name.
+    /// </summary>
+    private ExpressionSyntax BuildUserDefinedConcat(IMethodSymbol op, ExpressionSyntax lhs, ExpressionSyntax rhs)
+    {
+        if (op.ContainingType.IsDefinedInSource()) {
+            return SyntaxFactory.BinaryExpression(SyntaxKind.AddExpression, lhs, rhs);
+        }
+        return SyntaxFactory.InvocationExpression(
+            SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                CommonConversions.GetTypeSyntax(op.ContainingType),
+                SyntaxFactory.IdentifierName(WellKnownMemberNames.ConcatenateOperatorName)),
+            SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(new[] {
+                SyntaxFactory.Argument(lhs), SyntaxFactory.Argument(rhs) })));
+    }
+
     private async Task<CSharpSyntaxNode> ConvertBinaryExpressionAsync(VBasic.Syntax.BinaryExpressionSyntax node, ExpressionSyntax lhs = null, ExpressionSyntax rhs = null)
     {
         lhs ??= await node.Left.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
@@ -1115,13 +1146,23 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         var lhsTypeInfo = _semanticModel.GetTypeInfo(node.Left);
         var rhsTypeInfo = _semanticModel.GetTypeInfo(node.Right);
 
+        // A `&` that binds to a user-defined `Operator &` is NOT string
+        // concatenation and must not be target-typed to string — doing so silently
+        // retyped the result as string, so `Dim q = part1 & part2` on
+        // MoreInput.Data.SqlQueryWithParameters produced a string and every later
+        // `q.Query` / `q.Parameters` failed to resolve (CS1061), far from the cause.
+        if (node.IsKind(VBasic.SyntaxKind.ConcatenateExpression) &&
+            GetUserDefinedConcatOperator(node) is { } userConcat) {
+            return BuildUserDefinedConcat(userConcat, lhs, rhs);
+        }
+
         ITypeSymbol forceLhsTargetType = null;
         bool omitRightConversion = false;
         bool omitConversion = false;
         if (lhsTypeInfo.Type != null && rhsTypeInfo.Type != null)
         {
-            if (node.IsKind(VBasic.SyntaxKind.ConcatenateExpression) && 
-                !lhsTypeInfo.Type.IsEnumType() && !rhsTypeInfo.Type.IsEnumType() && 
+            if (node.IsKind(VBasic.SyntaxKind.ConcatenateExpression) &&
+                !lhsTypeInfo.Type.IsEnumType() && !rhsTypeInfo.Type.IsEnumType() &&
                 !lhsTypeInfo.Type.IsDateType() && !rhsTypeInfo.Type.IsDateType())
             {
                 omitRightConversion = true;
