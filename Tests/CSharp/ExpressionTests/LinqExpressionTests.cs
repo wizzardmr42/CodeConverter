@@ -4115,6 +4115,50 @@ public static partial class M
     }
 
     [Fact]
+    public async Task ExpressionTreeLambdaWithReferenceWideningBodyGetsExplicitUpcastAsync()
+    {
+        // VB compiles `Function(oi) oi.Order` for Expression(Of Func(Of T, BaseT))
+        // with a Convert node (Body.Type = BaseT); C# omits implicit reference
+        // conversions from trees (Body.Type = derived). Infrastructure keying off
+        // Body.Type (MoreInput.CBC ExecuteLambda) then casts the compiled
+        // Func<T, BaseT> to Func<T, Derived> at runtime - InvalidCastException.
+        // The explicit upcast reproduces VB's tree shape.
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System
+Imports System.Linq.Expressions
+
+Public Class BaseOrder
+End Class
+
+Public Class Item(Of TOrder As {BaseOrder, New})
+    Public Overridable Property Order As TOrder
+
+    Public Shared ReadOnly Property BaseOrderExpression As Expression(Of Func(Of Item(Of TOrder), BaseOrder))
+        Get
+            Return Function(oi) oi.Order
+        End Get
+    End Property
+End Class", @"using System;
+using System.Linq.Expressions;
+
+public partial class BaseOrder
+{
+}
+
+public partial class Item<TOrder> where TOrder : BaseOrder, new()
+{
+    public virtual TOrder Order { get; set; }
+
+    public static Expression<Func<Item<TOrder>, BaseOrder>> BaseOrderExpression
+    {
+        get
+        {
+            return oi => (BaseOrder)oi.Order;
+        }
+    }
+}");
+    }
+
+    [Fact]
     public async Task NullableBoolFuncToBoolFuncAsync()
     {
         // BMCore DispatchDateCalculator: `Function(ds As

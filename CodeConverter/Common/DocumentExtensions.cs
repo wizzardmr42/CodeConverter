@@ -52,7 +52,8 @@ internal static class DocumentExtensions
     {
         //"private int value = unchecked((int)0x80000010);" is simplified to "private int value = unchecked(0x80000010);"
         // which causes CS0266: "Cannot implicitly convert type 'uint' to 'int'"
-        return (n is CSSyntax.CastExpressionSyntax { Parent : CSSyntax.CheckedExpressionSyntax });
+        return (n is CSSyntax.CastExpressionSyntax { Parent : CSSyntax.CheckedExpressionSyntax })
+               || n.HasAnnotations(AnnotationConstants.PreserveCastAnnotationKind);
     }
 
     public static async Task<Document> WithExpandedRootAsync(this Document document, CancellationToken cancellationToken)

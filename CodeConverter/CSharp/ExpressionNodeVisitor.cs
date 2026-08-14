@@ -1652,6 +1652,26 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                             // the smaller declared type; C# needs the cast.
                             csNode = ValidSyntaxFactory.CastExpression(
                                 CommonConversions.GetTypeSyntax(delegateReturn), csNode.AddParens());
+                        } else if (isExpressionTreeLambda && bodyType is { IsReferenceType: true }
+                                   && delegateReturn is { IsReferenceType: true }
+                                   && !SymbolEqualityComparer.Default.Equals(bodyType, delegateReturn)
+                                   // Reference widening OR type-parameter-to-constraint widening
+                                   // (the latter classifies with capability flags false).
+                                   && _semanticModel.Compilation.ClassifyCommonConversion(bodyType, delegateReturn)
+                                       is { IsImplicit: true, IsIdentity: false, IsNumeric: false, IsUserDefined: false }) {
+                                                        // Expression-TREE shape fidelity: VB inserts a Convert
+                            // node for the reference widening (`Function(oi) oi.Order`
+                            // for an Expression(Of Func(Of ..., OrderBase))); C#
+                            // omits it, so Body.Type differs. Infrastructure that
+                            // inspects tree shape breaks at runtime — MoreInput.CBC's
+                            // ExecuteLambda keys the compiled delegate off Body.Type
+                            // (Func<...,Order> vs Func<...,OrderBase> InvalidCast),
+                            // and EF translation sees shapes too. An explicit upcast
+                            // makes C# emit the same Convert node VB does.
+                            // (Annotated: the simplifier would strip it as redundant.)
+                            csNode = ValidSyntaxFactory.CastExpression(
+                                    CommonConversions.GetTypeSyntax(delegateReturn), csNode.AddParens())
+                                .WithAdditionalAnnotations(new SyntaxAnnotation(AnnotationConstants.PreserveCastAnnotationKind));
                         } else if (bodyType is IArrayTypeSymbol bodyArray
                                    && delegateReturn is IArrayTypeSymbol returnArray
                                    && returnArray.ElementType is INamedTypeSymbol { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } arrayEnumUnderlying }

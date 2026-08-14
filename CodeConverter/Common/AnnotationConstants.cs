@@ -8,6 +8,9 @@ internal static class AnnotationConstants
     public const string SelectedNodeAnnotationKind = "CodeConverter.SelectedNode";
     public const string AnnotatedNodeIsParentData = "CodeConverter.SelectedNode.IsAllChildrenOfThisNode";
     public const string ConversionErrorAnnotationKind = "CodeConverter.ConversionError";
+    /// <summary>Casts that look redundant to the C# simplifier but are semantically
+    /// load-bearing (e.g. expression-tree Convert-node fidelity) - never remove.</summary>
+    public const string PreserveCastAnnotationKind = "CodeConverter.PreserveCast";
     public const string SourceStartLineAnnotationKind = "CodeConverter.SourceStartLine";
     public const string SourceEndLineAnnotationKind = "CodeConverter.SourceEndLine";
     public const string LeadingTriviaAlreadyMappedAnnotation = nameof(CodeConverter) + "." + nameof(LeadingTriviaAlreadyMappedAnnotation);
