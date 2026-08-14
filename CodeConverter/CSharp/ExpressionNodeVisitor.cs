@@ -2600,6 +2600,18 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             }
         }
 
+        // `IsNothing(x)` on a NON-NULLABLE VALUE TYPE is always False in VB — the
+        // argument is boxed and a boxed value is never null. The generic replacement
+        // emits `x == null`, which C# rejects outright for a struct (CS0019). Fold to
+        // the constant VB would have produced. (Real case: `If Not IsNothing(w)` where
+        // w is a Structure — always-true defensive code in StrategyManager.)
+        if (symbol?.Name == "IsNothing" && node.ArgumentList?.Arguments.Count == 1) {
+            var argType = _semanticModel.GetTypeInfo(node.ArgumentList.Arguments[0].GetExpression()).Type;
+            if (argType is { IsValueType: true } && !argType.IsNullable()) {
+                return LiteralConversions.GetLiteralExpression(false);
+            }
+        }
+
         if (SimpleMethodReplacement.TryGet(symbol, out var methodReplacement) &&
             methodReplacement.ReplaceIfMatches(symbol, await ConvertArgumentsAsync(node.ArgumentList), false) is {} csExpression) {
             cSharpSyntaxNode = csExpression;

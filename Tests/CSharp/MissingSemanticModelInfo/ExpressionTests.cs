@@ -373,6 +373,10 @@ CS0103: The name 'MyEvent' does not exist in the current context");
     }
 
     [Fact]
+    // `IsNothing(y)` where y is a non-nullable VALUE type is always False in VB (the
+    // argument is boxed, and a boxed value is never null), so it now folds to `false`.
+    // The previous expectation, `y == null`, was itself CS0019 in C#. `x` keeps the
+    // generic `== null` form because its type is unknown here.
     public async Task ConvertBuiltInMethodWithUnknownArgumentTypeAsync()
     {
         await TestConversionVisualBasicToCSharpAsync(
@@ -391,7 +395,7 @@ internal partial class A
     {
         SomeUnknownType x = default;
         int y = 3;
-        if (x == null || y == null)
+        if (x == null || false)
         {
 
         }
