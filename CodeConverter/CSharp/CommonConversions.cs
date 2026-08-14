@@ -353,7 +353,13 @@ internal class CommonConversions
         if (rankSpecifiers.Count > 0)
         {
             var rankSpecifiersWithSizes = await ConvertArrayRankSpecifierSyntaxesAsync(name.ArrayRankSpecifiers, name.ArrayBounds);
-            var arrayTypeSyntax = ((ArrayTypeSyntax)GetTypeSyntax(typeSymbol)).WithRankSpecifiers(rankSpecifiersWithSizes);
+            // `Dim x() = expr` — the rank specifier says array, but the declared symbol's
+            // type isn't always one (inferred-from-initializer declarations can resolve to
+            // the ELEMENT type), and GetTypeSyntax then returns a plain name. Blind-casting
+            // threw InvalidCastException, aborting the whole statement's conversion.
+            var declaredTypeSyntax = GetTypeSyntax(typeSymbol);
+            var arrayTypeSyntax = (declaredTypeSyntax as ArrayTypeSyntax ?? SyntaxFactory.ArrayType(declaredTypeSyntax))
+                .WithRankSpecifiers(rankSpecifiersWithSizes);
             if (rankSpecifiersWithSizes.SelectMany(ars => ars.Sizes).Any(e => !e.IsKind(CSSyntaxKind.OmittedArraySizeExpression))) {
                 initializer = SyntaxFactory.ArrayCreationExpression(arrayTypeSyntax);
             } else if (initializer is CSSyntax.ImplicitArrayCreationExpressionSyntax iaces && iaces.Initializer != null) {

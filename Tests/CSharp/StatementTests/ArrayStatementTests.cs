@@ -529,4 +529,28 @@ public partial class SplitArrayDeclarations
     }
 }");
     }
+
+    [Fact]
+    public async Task InferredArrayDeclarationWithEmptyRankSpecifierAsync()
+    {
+        // `Dim x() = expr` - the rank specifier says array but the declared symbol's
+        // type can resolve to the element type, so GetTypeSyntax returns a plain name.
+        // A blind (ArrayTypeSyntax) cast threw InvalidCastException and aborted the
+        // whole statement's conversion (real case: WarehouseManagerController).
+        await TestConversionVisualBasicToCSharpAsync(@"Public Class TestClass
+    Private Sub TestMethod(codes As String)
+        Dim codesArray() = codes.ToCharArray()
+        codesArray = codesArray.Distinct().ToArray()
+    End Sub
+End Class", @"using System.Linq;
+
+public partial class TestClass
+{
+    private void TestMethod(string codes)
+    {
+        char[] codesArray = codes.ToCharArray();
+        codesArray = codesArray.Distinct().ToArray();
+    }
+}");
+    }
 }
