@@ -202,7 +202,13 @@ internal class CommonConversions
         exp = op?.Syntax as VBSyntax.ExpressionSyntax;
         var vbInitConstantValue = exp != null ? SemanticModel.GetConstantValue(exp) : default;
         isNothingLiteral = vbInitConstantValue.HasValue && vbInitConstantValue.Value == null || exp is VBSyntax.LiteralExpressionSyntax les && les.IsKind(SyntaxKind.NothingLiteralExpression);
-        bool shouldPreferExplicitType = expConvertedType != null && (expConvertedType.HasCsKeyword() || !expConvertedType.Equals(op.Type, SymbolEqualityComparer.IncludeNullability));
+        // `op` is null whenever the semantic model can't produce an operation for the
+        // initializer (happens inside some lambda/Using scopes). Dereferencing it threw
+        // an NRE that aborted the whole enclosing statement's conversion, emitting
+        // `#error Cannot convert UsingBlockSyntax/LocalDeclarationStatementSyntax`.
+        // With no operation there's no source type to compare against, so fall back to
+        // the type check alone.
+        bool shouldPreferExplicitType = expConvertedType != null && (expConvertedType.HasCsKeyword() || !expConvertedType.Equals(op?.Type, SymbolEqualityComparer.IncludeNullability));
         return shouldPreferExplicitType;
     }
 
