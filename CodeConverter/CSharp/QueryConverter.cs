@@ -253,8 +253,15 @@ internal class QueryConverter
                 subQuery = (CSSyntax.QueryBodySyntax)new QualifyAnonMembersRewriter(reusableFromCsId.ValueText, anonMembersInScope).Visit(subQuery);
             }
 
-            // e.g. `from x in xs select x` is not useful, so just use `xs` directly
-            bool isUsefulQuery = subQuery is not null && (!subQuery.SelectOrGroup.HasAnnotation(DefaultSelectAnnotation) || subQuery.Clauses.Any());
+            // e.g. `from x in xs select x` is not useful, so just use `xs` directly.
+            // But `from short i in xs select i` IS useful: an explicitly typed range
+            // variable carries a per-element conversion (C# compiles it to
+            // `xs.Cast<short>()`, VB to a CType per element). Collapsing to `xs`
+            // silently dropped that, so `Dim a = (From i As Short In s.Split(",")).ToArray`
+            // came out as `short[] a = s.Split(',').ToArray()` — CS0029, string[] to short[].
+            bool typedRangeVariable = fromClauseSyntax.Type is not null;
+            bool isUsefulQuery = subQuery is not null &&
+                (!subQuery.SelectOrGroup.HasAnnotation(DefaultSelectAnnotation) || subQuery.Clauses.Any() || typedRangeVariable);
             query = isUsefulQuery ? SyntaxFactory.QueryExpression(fromClauseSyntax, subQuery) : fromClauseSyntax.Expression;
 
             // Track the shape flowing into the next segment: a final anon
