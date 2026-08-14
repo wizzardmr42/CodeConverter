@@ -1142,6 +1142,13 @@ internal class QueryConverter
             CSSyntax.NameColonSyntax => false,
             CSSyntax.QualifiedNameSyntax => false,
             CSSyntax.MemberBindingExpressionSyntax => false,
+            // The member being INITIALISED in an object initializer is a member
+            // name, not a reference to the range variable that happens to share
+            // its name. Qualifying it produced `p.StockItem = p.StockItem`, which
+            // is not a legal initializer target (CS0747), and the knock-on read of
+            // it as an anonymous-type member assignment gave CS0200 as well.
+            CSSyntax.AssignmentExpressionSyntax ae when ae.Left == node
+                && ae.Parent.IsKind(SyntaxKind.ObjectInitializerExpression) => false,
             _ => true
         };
 

@@ -643,8 +643,31 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
 
     public override async Task<CSharpSyntaxNode> VisitInferredFieldInitializer(VBasic.Syntax.InferredFieldInitializerSyntax node)
     {
-        return SyntaxFactory.AnonymousObjectMemberDeclarator(await node.Expression.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor));
+        var converted = await node.Expression.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
+        // VB infers an anonymous-type member name from more expression shapes than
+        // C# does — `New With {x.Count()}` names the member `Count`, but C# infers
+        // names only from a simple name or a member access, so an invocation is
+        // CS0746 "Invalid anonymous type member declarator" (and any later
+        // reference to the member is then CS0103). Pin the VB-inferred name
+        // explicitly whenever C# could not have worked it out.
+        if (!CanCsInferAnonymousMemberName(converted) &&
+            node.Expression.ExtractAnonymousTypeMemberName() is { } inferredName) {
+            return SyntaxFactory.AnonymousObjectMemberDeclarator(
+                SyntaxFactory.NameEquals(ValidSyntaxFactory.IdentifierName(
+                    CommonConversions.ConvertIdentifier(inferredName))),
+                converted);
+        }
+        return SyntaxFactory.AnonymousObjectMemberDeclarator(converted);
     }
+
+    /// <summary>C# infers an anonymous-type member name only from a simple name or a member access.</summary>
+    private static bool CanCsInferAnonymousMemberName(ExpressionSyntax expression) => expression switch {
+        IdentifierNameSyntax => true,
+        MemberAccessExpressionSyntax => true,
+        MemberBindingExpressionSyntax => true,
+        ConditionalAccessExpressionSyntax cae => CanCsInferAnonymousMemberName(cae.WhenNotNull),
+        _ => false
+    };
 
     public override async Task<CSharpSyntaxNode> VisitObjectCreationExpression(VBasic.Syntax.ObjectCreationExpressionSyntax node)
     {
