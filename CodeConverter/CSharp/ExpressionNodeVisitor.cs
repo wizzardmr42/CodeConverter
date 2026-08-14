@@ -912,6 +912,15 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                     node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide),
                     toStringCall);
             } else if (rightType != null && !SymbolEqualityComparer.Default.Equals(rightType, leftUnderlying)
+                       // A fallback that is ITSELF `T?` already shares a type with the
+                       // left under `??`, and `T? ?? T?` is legitimately `T?`. Casting
+                       // it down to bare T made the whole coalesce non-nullable, which
+                       // then broke every nullable operation applied to the RESULT:
+                       // `(a ?? b)?.ToString()` became `?.` on a non-nullable (CS0023)
+                       // and `(a ?? b).HasValue` stopped resolving (CS1061). VB keeps
+                       // `If(a, b)` nullable when both arms are.
+                       && !(rightType.IsNullable(out var rightUnderlying)
+                            && SymbolEqualityComparer.Default.Equals(rightUnderlying, leftUnderlying))
                        && (leftUnderlying.IsNumericType() || leftUnderlying.SpecialType == SpecialType.System_Boolean
                            || leftUnderlying.SpecialType == SpecialType.System_DateTime || leftUnderlying.SpecialType == SpecialType.System_Char)) {
                 // VB target-types the fallback to the left operand's underlying type:

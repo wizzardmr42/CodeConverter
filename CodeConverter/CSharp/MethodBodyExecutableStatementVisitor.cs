@@ -1273,10 +1273,24 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         return SingleStatement(SyntaxFactory.UsingStatement(null, expr, unpackPossiblyNestedBlock));
     }
 
+    /// <summary>
+    /// A VB loop condition over nullable operands (`While qty &lt; expected.Value`
+    /// guarded by a HasValue test) is `Boolean?`, and VB treats Nothing as False.
+    /// C# `while` demands `bool` (CS0266). VisitIfBlock already routes its
+    /// condition through the conversion analyzer for exactly this reason; the
+    /// loop forms did not.
+    /// </summary>
+    private async Task<ExpressionSyntax> ConvertLoopConditionAsync(VBSyntax.ExpressionSyntax condition)
+    {
+        var converted = await condition.AcceptAsync<ExpressionSyntax>(_expressionVisitor);
+        return CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+            condition, converted, forceTargetType: CommonConversions.KnownTypes.Boolean);
+    }
+
     public override async Task<SyntaxList<StatementSyntax>> VisitWhileBlock(VBSyntax.WhileBlockSyntax node)
     {
         return SingleStatement(SyntaxFactory.WhileStatement(
-            await node.WhileStatement.Condition.AcceptAsync<ExpressionSyntax>(_expressionVisitor),
+            await ConvertLoopConditionAsync(node.WhileStatement.Condition),
             SyntaxFactory.Block(await ConvertStatementsAsync(node.Statements)).UnpackNonNestedBlock()
         ));
     }
@@ -1289,11 +1303,11 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
             var stmt = node.DoStatement.WhileOrUntilClause;
             if (stmt.WhileOrUntilKeyword.IsKind(VBasic.SyntaxKind.WhileKeyword))
                 return SingleStatement(SyntaxFactory.WhileStatement(
-                    await stmt.Condition.AcceptAsync<ExpressionSyntax>(_expressionVisitor),
+                    await ConvertLoopConditionAsync(stmt.Condition),
                     statements
                 ));
             return SingleStatement(SyntaxFactory.WhileStatement(
-                (await stmt.Condition.AcceptAsync<ExpressionSyntax>(_expressionVisitor)).InvertCondition(),
+                (await ConvertLoopConditionAsync(stmt.Condition)).InvertCondition(),
                 statements
             ));
         }
@@ -1302,7 +1316,7 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         ExpressionSyntax conditionExpression;
         bool isUntilStmt;
         if (whileOrUntilStmt != null) {
-            conditionExpression = await whileOrUntilStmt.Condition.AcceptAsync<ExpressionSyntax>(_expressionVisitor);
+            conditionExpression = await ConvertLoopConditionAsync(whileOrUntilStmt.Condition);
             isUntilStmt = whileOrUntilStmt.WhileOrUntilKeyword.IsKind(VBasic.SyntaxKind.UntilKeyword);
         } else {
             conditionExpression = SyntaxFactory.LiteralExpression(SyntaxKind.TrueLiteralExpression);
