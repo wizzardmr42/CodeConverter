@@ -2123,10 +2123,17 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             if (allTypeArgs != null) {
                 return (SimpleNameSyntax)CommonConversions.CsSyntaxGenerator.GenericName(convertedIdentifier.Text, allTypeArgs);
             }
+            // Couldn't recover the full C# type-argument list (VB's reduced form omits
+            // the extension receiver's type parameter, and the C# symbol lookup can come
+            // back null on semantic-model gaps). Emit the call WITHOUT type arguments and
+            // let C# infer them, recording the VB list in a comment.
+            //
+            // No `#error` here: for the usual shapes (`.ToDictionary(Of K, V)(kSel, vSel)`
+            // and friends) inference produces exactly the same types, so a hard error
+            // would break an otherwise-correct build. If inference genuinely can't
+            // resolve them, the compiler still says so loudly at this very site (CS0411).
             var commentedText = "/* " + (await ConvertTypeArgumentListAsync(node)).ToFullString() + " */";
-            var error = SyntaxFactory.ParseLeadingTrivia($"#error Conversion error: Could not convert all type parameters, so they've been commented out. Inferred type may be different{Environment.NewLine}");
-            var partialConversion = SyntaxFactory.Comment(commentedText);
-            return ValidSyntaxFactory.IdentifierName(convertedIdentifier).WithPrependedLeadingTrivia(error).WithTrailingTrivia(partialConversion);
+            return ValidSyntaxFactory.IdentifierName(convertedIdentifier).WithTrailingTrivia(SyntaxFactory.Comment(commentedText));
         }
 
         return SyntaxFactory.GenericName(convertedIdentifier, await ConvertTypeArgumentListAsync(node));

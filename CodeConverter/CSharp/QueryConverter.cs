@@ -472,7 +472,12 @@ internal class QueryConverter
                     selectOrGroup = SyntaxFactory.GroupClause(groupElement, await GetGroupExpressionAsync(gcs));
                 } else {
                     var item = await gcs.Items.Single().Expression.AcceptAsync<CSSyntax.IdentifierNameSyntax>(_triviaConvertingVisitor);
-                    var keyExpression = await gcs.Keys.Single().Expression.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+                    // COMPOSITE keys are legal here too (`Group l By a, t = f(x) Into ...`);
+                    // Keys.Single() threw "Sequence contains more than one element" and
+                    // aborted the whole query's conversion. GetGroupExpressionAsync builds
+                    // the anonymous-type key when there are several, exactly as the
+                    // implicit-item branch above already does.
+                    var keyExpression = await GetGroupExpressionAsync(gcs);
                     selectOrGroup = SyntaxFactory.GroupClause(item, keyExpression);
                 }
                 if (nestedClause != null) {
