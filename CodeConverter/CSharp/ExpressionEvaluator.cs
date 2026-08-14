@@ -82,6 +82,12 @@ internal class ExpressionEvaluator
 
     private bool TryCompileTimeEvaluate(IOperation vbOperation, out object result)
     {
+        // The semantic model yields no operation for some expressions (and the
+        // recursive binary-expression path can hand us null operands). Dereferencing
+        // threw an NRE that aborted conversion of the whole enclosing statement —
+        // "#error Cannot convert SelectBlockSyntax" in StrategyManager's
+        // WeeklyTradingReport. Nothing to evaluate means "not a compile-time constant".
+        if (vbOperation == null) { result = null; return false; }
         if (vbOperation.ConstantValue.HasValue) {
             result = vbOperation.ConstantValue.Value;
             return true;

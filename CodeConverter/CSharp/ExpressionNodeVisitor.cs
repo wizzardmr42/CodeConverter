@@ -2644,12 +2644,13 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         return _semanticModel.GetOperation(node) switch {
             IInvocationOperation invocation => SyntaxFactory.InvocationExpression(id, CreateArgList(invocation.TargetMethod)),
             IPropertyReferenceOperation propReference when propReference.Property.Parameters.Any() => SyntaxFactory.InvocationExpression(id, CreateArgList(propReference.Property)),
-            // GetOperation returns null wherever the semantic model has a gap — most
-            // notably inside query clauses, where a paren-less VB call used as the query
-            // SOURCE (`From c In DB.GetFullTableCache(Of Country)`) emitted a bare method
-            // group and the following clause failed to parse (CS1525 at `orderby`).
-            // Symbol info survives those gaps, so fall back to it.
-            null when NeedsImplicitInvocationParens(node) is { } method
+            // A paren-less VB call used as a query SOURCE
+            // (`From c In DB.GetFullTableCache(Of Country)`) emitted a bare method group,
+            // so the following clause failed to parse (CS1525 at `orderby`). In that
+            // position the semantic model gives either no operation at all or a
+            // non-invocation one, so neither case above fires — fall back to symbol
+            // info, which survives both.
+            _ when NeedsImplicitInvocationParens(node) is { } method
                 => SyntaxFactory.InvocationExpression(id, CreateArgList(method)),
             _ => id
         };
