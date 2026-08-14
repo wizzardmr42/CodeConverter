@@ -2652,6 +2652,11 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             // info, which survives both.
             _ when NeedsImplicitInvocationParens(node) is { } method
                 => SyntaxFactory.InvocationExpression(id, CreateArgList(method)),
+            // Symbol info can be missing entirely here (generic base classes resolve
+            // nothing in this workspace); explicit type arguments still prove it's a
+            // method call, since VB has no generic properties.
+            _ when IsGenericQuerySourceNeedingParens(node)
+                => SyntaxFactory.InvocationExpression(id, SyntaxFactory.ArgumentList()),
             _ => id
         };
     }
@@ -2669,6 +2674,20 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         return GetSymbolInfoInDocument<ISymbol>(node) is IMethodSymbol { MethodKind: MethodKind.Ordinary } m
                && m.Parameters.All(p => p.IsOptional || p.IsParams)
             ? m : null;
+    }
+
+    /// <summary>
+    /// True when a query source is syntactically a GENERIC name — `From c In X.Get(Of T)`.
+    /// VB has no generic properties, so explicit type arguments prove this is a method
+    /// call needing `()` in C#. Used when symbol info is unavailable (BMViewPage's
+    /// generic base class resolves nothing), where <see cref="NeedsImplicitInvocationParens"/>
+    /// can't decide.
+    /// </summary>
+    private static bool IsGenericQuerySourceNeedingParens(SyntaxNode node)
+    {
+        if (node.Parent is not VBSyntax.CollectionRangeVariableSyntax crv || crv.Expression != node) return false;
+        return node is VBSyntax.GenericNameSyntax
+               || node is VBSyntax.MemberAccessExpressionSyntax { Name: VBSyntax.GenericNameSyntax };
     }
 
     /// <summary>
