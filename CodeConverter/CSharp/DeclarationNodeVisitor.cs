@@ -165,7 +165,21 @@ internal class DeclarationNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSh
             ClassificationTypeNames.ModuleName
         };
 
-        var usingDirective = staticClassifications.Contains(classification)
+        // The classifier is the original signal but it's unreliable — it needs a
+        // document and full workspace classification, and comes back wrong (or null)
+        // for files whose semantic info is incomplete. The symbol is authoritative:
+        // importing a TYPE (VB Module or Class, for its shared members) has to become
+        // `using static` in C#, or the compiler rejects it outright with CS0138 and
+        // every type in the file then fails to resolve (a CS0246 cascade that also
+        // suppresses body diagnostics). Aliases keep the plain form — `using X = T;`
+        // is valid C# and `using static` can't take an alias.
+        // Project-level ("global") imports are synthesised and belong to no syntax tree,
+        // so asking the model about them throws — check tree identity first.
+        bool importsAType = node.Alias == null
+                            && _semanticModel.SyntaxTree == node.SyntaxTree
+                            && _semanticModel.GetSymbolInfo(node.Name).Symbol is INamedTypeSymbol;
+
+        var usingDirective = importsAType || staticClassifications.Contains(classification)
             ? ValidSyntaxFactory.UsingDirective(staticToken, nameEqualsSyntax, name)
             : SyntaxFactory.UsingDirective(nameEqualsSyntax, name);
 
