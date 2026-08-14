@@ -912,7 +912,21 @@ internal class QueryConverter
             VBSyntax.GroupAggregationSyntax => v.NameEquals?.Identifier.Identifier,
             _ => default
         }).Concat(gs.Keys.Select(k => k.NameEquals?.Identifier.Identifier)).FirstOrDefault(x => x != null);
-        return name is {} finalName ? CommonConversions.ConvertIdentifier(finalName) : SyntaxFactory.Identifier("@group");
+        if (name is {} finalName) return CommonConversions.ConvertIdentifier(finalName);
+        // `Group d By d.Picker Into Group` (items present, aggregation unnamed)
+        // declares a range variable literally called `Group`, and the query body
+        // refers to it by that name. Falling straight through to `@group` renamed
+        // the DECLARATION but not the references — and because C# is
+        // case-sensitive, `Group.Sum(...)` in the body then bound to whatever TYPE
+        // named Group was in scope instead (CS0104, ambiguous between
+        // BMCore.DataClasses.Group and System.Text.RegularExpressions.Group).
+        // Same reasoning as the no-items branch above, so keep the same collision
+        // guard.
+        if (!letBoundNames.Contains("Group") &&
+            gs.AggregationVariables.Any(v => v.Aggregation is VBSyntax.GroupAggregationSyntax && v.NameEquals == null)) {
+            return CommonConversions.CsEscapedIdentifier("Group");
+        }
+        return SyntaxFactory.Identifier("@group");
     }
 
     private static IEnumerable<string> GetGroupKeyIdentifiers(VBSyntax.GroupByClauseSyntax gs)

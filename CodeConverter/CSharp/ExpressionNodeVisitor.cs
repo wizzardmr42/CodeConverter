@@ -854,6 +854,33 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             && node.SecondExpression.SkipIntoParens().IsKind(VBasic.SyntaxKind.FalseLiteralExpression)) {
             return leftSide;
         }
+
+        // `If(maybeDecimal, DBNull.Value)` — the ubiquitous SqlParameter idiom.
+        // VB unifies the two arms at Object. There is no conversion between a
+        // value type and DBNull in either direction, so every attempt to give
+        // `??` a common type fails (CS0019). Widen the LEFT to object, which is
+        // what VB does and what SqlParameter's constructor wants anyway.
+        if (rightType?.ToDisplayString() == "System.DBNull") {
+            leftForBinary = ValidSyntaxFactory.CastExpression(
+                CommonConversions.GetTypeSyntax(_semanticModel.Compilation.GetSpecialType(SpecialType.System_Object)),
+                leftForBinary);
+            var dbNullExpr = SyntaxFactory.BinaryExpression(SyntaxKind.CoalesceExpression, leftForBinary, rightForBinary);
+            return node.Parent.IsKind(VBasic.SyntaxKind.Interpolation) || node.PrecedenceCouldChange()
+                ? SyntaxFactory.ParenthesizedExpression(dbNullExpr)
+                : (CSharpSyntaxNode)dbNullExpr;
+        }
+
+        // VB `If(a, b)` where `a` cannot be Nothing simply yields `a`. That shape
+        // reaches here when Option Strict Off made the VB expression Object while
+        // the conversion produced a non-nullable value type — notably the
+        // Operators.ConditionalCompare* helpers, which return plain bool. The VB
+        // type is Object, so none of the nullable-based branches below catch it,
+        // and `bool ?? false` is CS0019. Drop the unreachable fallback.
+        if (leftSide is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax cmpMa }
+            && cmpMa.Name.Identifier.ValueText.StartsWith("ConditionalCompare", StringComparison.Ordinal)) {
+            return leftSide;
+        }
+
         if (leftType != null && leftType.IsNullable(out var leftUnderlying) && leftUnderlying != null) {
             bool rhsIsString = rightType?.SpecialType == SpecialType.System_String;
             bool underlyingIsString = leftUnderlying.SpecialType == SpecialType.System_String;

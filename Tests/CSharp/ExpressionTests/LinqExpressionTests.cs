@@ -73,10 +73,10 @@ public static partial class Module1
     {
         var list = new List<C>();
         var result = from f in list
-                     group f by f.MyString into @group
-                     let MyString = @group.Key
+                     group f by f.MyString into Group
+                     let MyString = Group.Key
                      orderby MyString
-                     select new { MyString, Group = @group };
+                     select new { MyString, Group };
     }
 }");
     }
