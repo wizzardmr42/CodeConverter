@@ -2614,8 +2614,30 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         return _semanticModel.GetOperation(node) switch {
             IInvocationOperation invocation => SyntaxFactory.InvocationExpression(id, CreateArgList(invocation.TargetMethod)),
             IPropertyReferenceOperation propReference when propReference.Property.Parameters.Any() => SyntaxFactory.InvocationExpression(id, CreateArgList(propReference.Property)),
+            // GetOperation returns null wherever the semantic model has a gap — most
+            // notably inside query clauses, where a paren-less VB call used as the query
+            // SOURCE (`From c In DB.GetFullTableCache(Of Country)`) emitted a bare method
+            // group and the following clause failed to parse (CS1525 at `orderby`).
+            // Symbol info survives those gaps, so fall back to it.
+            null when NeedsImplicitInvocationParens(node) is { } method
+                => SyntaxFactory.InvocationExpression(id, CreateArgList(method)),
             _ => id
         };
+    }
+
+    /// <summary>
+    /// The method symbol for a VB paren-less call in QUERY SOURCE position
+    /// (`From x In &lt;node&gt;`) that needs `()` in C#, or null.
+    /// Scoped to that one position on purpose: a method group is legitimate elsewhere
+    /// (`AddressOf M`, VB function-return assignment `M = value`), and only the query
+    /// context suffers the missing-operation gap this compensates for.
+    /// </summary>
+    private IMethodSymbol NeedsImplicitInvocationParens(SyntaxNode node)
+    {
+        if (node.Parent is not VBSyntax.CollectionRangeVariableSyntax crv || crv.Expression != node) return null;
+        return GetSymbolInfoInDocument<ISymbol>(node) is IMethodSymbol { MethodKind: MethodKind.Ordinary } m
+               && m.Parameters.All(p => p.IsOptional || p.IsParams)
+            ? m : null;
     }
 
     /// <summary>

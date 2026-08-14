@@ -4159,6 +4159,57 @@ public partial class Item<TOrder> where TOrder : BaseOrder, new()
     }
 
     [Fact]
+    public async Task ParameterlessGenericMethodAsQuerySourceGetsInvocationParensAsync()
+    {
+        // VB lets you call a parameterless method without parens; as a query
+        // source the semantic model yields no operation in this position, so the
+        // implicit-invocation pass saw nothing and emitted `from c in db.GetAll<Country>`
+        // - CS1525 "Invalid expression term 'orderby'".
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+Imports System.Linq
+
+Public Class Country
+    Public Property Name As String
+End Class
+
+Public Class Db
+    Public Function GetAll(Of T)() As IEnumerable(Of T)
+        Return Nothing
+    End Function
+End Class
+
+Public Module M
+    Public Function Do1(db As Db) As IEnumerable(Of Country)
+        Return From c In db.GetAll(Of Country) Order By c.Name
+    End Function
+End Module", @"using System.Collections.Generic;
+using System.Linq;
+
+public partial class Country
+{
+    public string Name { get; set; }
+}
+
+public partial class Db
+{
+    public IEnumerable<T> GetAll<T>()
+    {
+        return null;
+    }
+}
+
+public static partial class M
+{
+    public static IEnumerable<Country> Do1(Db db)
+    {
+        return from c in db.GetAll<Country>()
+               orderby c.Name
+               select c;
+    }
+}");
+    }
+
+    [Fact]
     public async Task NullableBoolFuncToBoolFuncAsync()
     {
         // BMCore DispatchDateCalculator: `Function(ds As
