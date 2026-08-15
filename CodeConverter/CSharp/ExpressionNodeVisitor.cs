@@ -1730,6 +1730,24 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                                     csNode.AddParens(),
                                     defaultLiteral);
                             }
+                        } else if (bodyType?.SpecialType == SpecialType.System_Object
+                                   && delegateReturn != null
+                                   && delegateReturn.SpecialType != SpecialType.System_Object
+                                   && node.Body is VBSyntax.ExpressionSyntax lateBoundBody
+                                   // A comparison/logical body over Object operands is
+                                   // reported as Object by VB but ALREADY emits `bool`
+                                   // in C# (`Function() a = Nothing` -> `() => a == default`),
+                                   // so converting would wrap a bool in
+                                   // Conversions.ToBoolean — redundant, and undesirable
+                                   // inside an expression tree.
+                                   && lateBoundBody.SkipIntoParens() is not (VBSyntax.BinaryExpressionSyntax or VBSyntax.UnaryExpressionSyntax)) {
+                            // Option Strict Off late binding: `.Any(Function(l) l.ActualChange)`
+                            // where the member is Object. VB converts the body to the
+                            // delegate's return type at runtime; C# will not, so the
+                            // lambda failed to convert to Func<T, bool> (CS1662, with
+                            // CS0266 on the body). Make the conversion explicit.
+                            csNode = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+                                lateBoundBody, csNode, forceTargetType: delegateReturn);
                         } else if (bodyType != null && delegateReturn?.SpecialType == SpecialType.System_Boolean
                                    && (bodyType.IsNumericType() || bodyType.TypeKind == TypeKind.Enum)) {
                             // VB `.Any(Function(x) x.SomeShort)` /
