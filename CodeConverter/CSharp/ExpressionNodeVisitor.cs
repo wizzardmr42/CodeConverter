@@ -661,7 +661,7 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     }
 
     /// <summary>C# infers an anonymous-type member name only from a simple name or a member access.</summary>
-    private static bool CanCsInferAnonymousMemberName(ExpressionSyntax expression) => expression switch {
+    internal static bool CanCsInferAnonymousMemberName(ExpressionSyntax expression) => expression switch {
         IdentifierNameSyntax => true,
         MemberAccessExpressionSyntax => true,
         MemberBindingExpressionSyntax => true,

@@ -723,6 +723,16 @@ internal class QueryConverter
         var selectedVariables = await vbSelectClause.Variables.SelectAsync(async v => {
             var nameEquals = await v.NameEquals.AcceptAsync<CSSyntax.NameEqualsSyntax>(_triviaConvertingVisitor);
             var expression = await v.Expression.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+            // Same VB-vs-C# gap as `New With {x.Count()}`, but on the query Select
+            // path: `Select c.ID, (From o In c.Orders Where ...).Count` names the
+            // member `Count` in VB, while C# infers names only from a simple name or
+            // member access. Without a name that member is CS0746, and the
+            // `Order By Count` referring to it is then CS0103.
+            if (nameEquals == null && !ExpressionNodeVisitor.CanCsInferAnonymousMemberName(expression) &&
+                v.Expression.ExtractAnonymousTypeMemberName() is { } inferredName) {
+                nameEquals = SyntaxFactory.NameEquals(ValidSyntaxFactory.IdentifierName(
+                    CommonConversions.ConvertIdentifier(inferredName)));
+            }
             return SyntaxFactory.AnonymousObjectMemberDeclarator(nameEquals, expression);
         });
 
