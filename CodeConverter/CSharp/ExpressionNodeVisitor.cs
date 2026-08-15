@@ -671,9 +671,20 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
 
     public override async Task<CSharpSyntaxNode> VisitObjectCreationExpression(VBasic.Syntax.ObjectCreationExpressionSyntax node)
     {
+        // `New ValueTuple(Of Date, StockLevel)(a, b)` — the type converts to C#
+        // tuple SYNTAX, `(DateTime, StockLevel)`, which cannot follow `new`
+        // (CS8181). Keep the explicit ValueTuple<...> name in a creation position.
+        // Not rewritten to a tuple literal: that is only equivalent for arity 2-7,
+        // whereas the explicit form is correct for every arity.
+        var createdType = await node.Type.AcceptAsync<TypeSyntax>(TriviaConvertingExpressionVisitor);
+        if (createdType is TupleTypeSyntax tupleType) {
+            createdType = SyntaxFactory.GenericName(SyntaxFactory.Identifier(nameof(ValueTuple)))
+                .WithTypeArgumentList(SyntaxFactory.TypeArgumentList(
+                    SyntaxFactory.SeparatedList(tupleType.Elements.Select(e => e.Type))));
+        }
 
         var objectCreationExpressionSyntax = SyntaxFactory.ObjectCreationExpression(
-            await node.Type.AcceptAsync<TypeSyntax>(TriviaConvertingExpressionVisitor),
+            createdType,
             // VB can omit empty arg lists:
             await ConvertArgumentListOrEmptyAsync(node, node.ArgumentList),
             null
