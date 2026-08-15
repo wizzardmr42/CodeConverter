@@ -569,8 +569,18 @@ internal class QueryConverter
         switch (linqQuery) {
             case VBSyntax.DistinctClauseSyntax _:
                 return Enumerable.Empty<CSSyntax.ExpressionSyntax>();
-            case VBSyntax.PartitionClauseSyntax pcs:
-                return new[] {await pcs.Count.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor)};
+            case VBSyntax.PartitionClauseSyntax pcs: {
+                // `Take TotalRows` / `Skip SkipAmount` are query CLAUSES, so the count
+                // never passes through VisitSimpleArgument and got no conversion at
+                // all. Under Option Strict Off the count is routinely something VB
+                // narrows implicitly — `Integer?`, `Double` — and Enumerable.Skip/Take
+                // take an int, so it emitted CS1503.
+                var count = await pcs.Count.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
+                count = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+                    pcs.Count, count,
+                    forceTargetType: _semanticModel.Compilation.GetSpecialType(SpecialType.System_Int32));
+                return new[] { count };
+            }
             case VBSyntax.PartitionWhileClauseSyntax pwcs: {
                 var lambdaParam = SyntaxFactory.Parameter(reusableCsFromId);
                 var lambdaBody = await pwcs.Condition.AcceptAsync<CSSyntax.ExpressionSyntax>(_triviaConvertingVisitor);
