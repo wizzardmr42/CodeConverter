@@ -2090,10 +2090,23 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
 
     public override async Task<CSharpSyntaxNode> VisitTupleExpression(VBasic.Syntax.TupleExpressionSyntax node)
     {
-        var args = await node.Arguments.SelectAsync(async a => {
+        // VB converts each tuple element independently, and under Option Strict Off
+        // will happily put an Integer into a String element. Converting nothing here
+        // left the whole tuple to be cast as a UNIT by the enclosing assignment —
+        // and because C# applies a tuple cast element-wise with no int->string
+        // conversion available, that emitted CS0030. Convert per element instead.
+        var convertedTupleType = _semanticModel.GetTypeInfo(node).ConvertedType as INamedTypeSymbol;
+        var targetElements = convertedTupleType?.IsTupleType == true ? convertedTupleType.TupleElements : default;
+        var args = new List<ArgumentSyntax>();
+        for (var i = 0; i < node.Arguments.Count; i++) {
+            var a = node.Arguments[i];
             var expr = await a.Expression.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
-            return SyntaxFactory.Argument(expr);
-        });
+            if (!targetElements.IsDefaultOrEmpty && i < targetElements.Length && targetElements[i].Type is { } targetType) {
+                expr = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+                    a.Expression, expr, forceTargetType: targetType);
+            }
+            args.Add(SyntaxFactory.Argument(expr));
+        }
         return SyntaxFactory.TupleExpression(SyntaxFactory.SeparatedList(args));
     }
 
