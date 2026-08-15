@@ -975,6 +975,24 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         var whenFalse = await node.WhenFalse.AcceptAsync<ExpressionSyntax>(TriviaConvertingExpressionVisitor);
         whenFalse = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.WhenFalse, whenFalse);
 
+        // VB picks a dominant type for the two arms and falls back to Object when
+        // there isn't one — `If(c, s.Split("-"), "")` is Object, not String() or
+        // String. C# requires a common type between the arms and reports CS0173
+        // instead, so make VB's choice explicit on both arms.
+        var conditionalType = _semanticModel.GetTypeInfo(node).Type;
+        if (conditionalType?.SpecialType == SpecialType.System_Object) {
+            var trueType = _semanticModel.GetTypeInfo(node.WhenTrue).Type;
+            var falseType = _semanticModel.GetTypeInfo(node.WhenFalse).Type;
+            if (trueType?.SpecialType != SpecialType.System_Object ||
+                falseType?.SpecialType != SpecialType.System_Object) {
+                var objectType = _semanticModel.Compilation.GetSpecialType(SpecialType.System_Object);
+                whenTrue = ValidSyntaxFactory.CastExpression(
+                    CommonConversions.GetTypeSyntax(objectType), whenTrue.AddParens());
+                whenFalse = ValidSyntaxFactory.CastExpression(
+                    CommonConversions.GetTypeSyntax(objectType), whenFalse.AddParens());
+            }
+        }
+
         var expr = SyntaxFactory.ConditionalExpression(condition, whenTrue, whenFalse);
 
 
