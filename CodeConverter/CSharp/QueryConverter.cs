@@ -345,9 +345,40 @@ internal class QueryConverter
     /// </summary>
     private string _lastImplicitSelectSingleName;
 
+    /// <summary>
+    /// Consecutive VB Selects each start a NEW scope, so re-listing a projection
+    /// is legal there — `Select oa, oa.Order` followed by `Select oa, oa.Order,
+    /// Order.PackagingGroup` is fine in VB. Every C# `let` in a query body shares
+    /// ONE scope, so emitting both gives CS1930 "range variable already declared".
+    /// Drop a later `let` only when the name AND the expression are identical, so
+    /// it is provably the same binding; a same-name/different-expression clash is
+    /// a real conflict and is left to surface rather than silently discarded.
+    /// Scoped to a single query body — no converter state to leak across nested
+    /// queries.
+    /// </summary>
+    private static SyntaxList<CSSyntax.QueryClauseSyntax> DropRepeatedLets(SyntaxList<CSSyntax.QueryClauseSyntax> clauses)
+    {
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        var kept = new List<CSSyntax.QueryClauseSyntax>();
+        foreach (var clause in clauses) {
+            if (clause is CSSyntax.LetClauseSyntax let) {
+                var name = let.Identifier.ValueText;
+                var expression = let.Expression.ToFullString().Trim();
+                if (seen.TryGetValue(name, out var existing)) {
+                    if (existing == expression) continue;
+                } else {
+                    seen[name] = expression;
+                }
+            }
+            kept.Add(clause);
+        }
+        return SyntaxFactory.List(kept);
+    }
+
     private async Task<CSSyntax.QueryBodySyntax> ConvertSubQueryAsync(SyntaxToken reusableCsFromId, VBSyntax.QueryClauseSyntax clauseEnd,
         CSSyntax.QueryBodySyntax nestedClause, SyntaxList<CSSyntax.QueryClauseSyntax> convertedClauses, IReadOnlyList<string> liveNames, bool liveChanged)
     {
+        convertedClauses = DropRepeatedLets(convertedClauses);
         CSSyntax.SelectOrGroupClauseSyntax selectOrGroup;
         CSSyntax.QueryContinuationSyntax queryContinuation = null;
         switch (clauseEnd) {
