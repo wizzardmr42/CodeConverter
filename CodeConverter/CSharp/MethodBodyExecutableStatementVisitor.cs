@@ -405,7 +405,25 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
                     forceTargetType: _semanticModel.Compilation.GetSpecialType(SpecialType.System_Double));
             }
 
-            var nonCompoundRhs = SyntaxFactory.BinaryExpression(nonCompound, lhsOperand, typeConvertedRhs);
+            // `ThisValue += prop.GetValue(Line)` with a Decimal lhs and an Object
+            // rhs (reflection): VB evaluates the addition LATE-BOUND and converts
+            // the Object result back for the assignment. The whole-statement
+            // late-bound branch above only fires when the LHS is Object, so this
+            // shape fell through to a plain `decimal + object` (CS0019). Substitute
+            // the same Operators helper here and leave the surrounding conversion
+            // to the existing code below, which already emits Conversions.ToDecimal.
+            ExpressionSyntax nonCompoundRhs;
+            var rhsOwnType = rhsTypeInfo.Type ?? rhsTypeInfo.ConvertedType;
+            if (rhsOwnType?.SpecialType == SpecialType.System_Object
+                && lhsTypeInfo.Type?.SpecialType != SpecialType.System_Object
+                && LateBoundCompoundOperatorName(node.Kind()) is { } mixedLateBoundOp) {
+                _extraUsingDirectives.Add("Microsoft.VisualBasic.CompilerServices");
+                nonCompoundRhs = SyntaxFactory.InvocationExpression(
+                    ValidSyntaxFactory.MemberAccess("Operators", mixedLateBoundOp),
+                    ExpressionSyntaxExtensions.CreateArgList(lhsOperand, typeConvertedRhs));
+            } else {
+                nonCompoundRhs = SyntaxFactory.BinaryExpression(nonCompound, lhsOperand, typeConvertedRhs);
+            }
             var typeConvertedNonCompoundRhs = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Right, nonCompoundRhs, forceSourceType: rhsTypeInfo.ConvertedType, forceTargetType: lhsTypeInfo.Type);
             if (nonCompoundRhs != typeConvertedNonCompoundRhs) {
                 kind = SyntaxKind.SimpleAssignmentExpression;
