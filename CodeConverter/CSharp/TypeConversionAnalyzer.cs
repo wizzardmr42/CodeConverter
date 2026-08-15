@@ -130,6 +130,16 @@ internal class TypeConversionAnalyzer
                 if (TryCreateUserDefinedConversionThroughIntermediate(vbNode, csNode, vbType, vbConvertedType) is { } viaOperator) {
                     return viaOperator;
                 }
+                // The CLR allows an array cast between an enum and its underlying
+                // type (`Byte()` -> `PurchaseOrderStatus()`), and VB uses it freely.
+                // The C# COMPILER refuses it (CS0030) even though the runtime would
+                // accept the identical IL, so route through object.
+                if (IsClrOnlyArrayCast(vbType, vbConvertedType)) {
+                    var viaObject = ValidSyntaxFactory.CastExpression(
+                        GetTypeSyntax(_semanticModel.Compilation.GetSpecialType(SpecialType.System_Object)),
+                        csNode.AddParens());
+                    return CreateCast(viaObject, vbConvertedType);
+                }
                 return CreateCast(csNode, vbConvertedType);
             case TypeConversionKind.Conversion:
                 return AddExplicitConvertTo(vbNode, csNode, vbType, vbConvertedType);
@@ -230,6 +240,25 @@ internal class TypeConversionAnalyzer
         }
         return false;
     }
+
+    /// <summary>
+    /// True for an array-to-array cast the CLR permits but C# rejects: the element
+    /// types share an underlying primitive but differ, i.e. one is an enum over the
+    /// other. Deliberately narrow — `int[]` to `IEnumerable&lt;short&gt;` must NOT
+    /// match, because that is invalid at runtime too and needs a real projection,
+    /// and routing it through object would turn a compile error into a crash.
+    /// </summary>
+    private static bool IsClrOnlyArrayCast(ITypeSymbol from, ITypeSymbol to)
+    {
+        if (from is not IArrayTypeSymbol { Rank: 1 } fromArray || to is not IArrayTypeSymbol { Rank: 1 } toArray) return false;
+        if (SymbolEqualityComparer.Default.Equals(fromArray.ElementType, toArray.ElementType)) return false;
+        var fromUnderlying = UnderlyingPrimitiveOf(fromArray.ElementType);
+        var toUnderlying = UnderlyingPrimitiveOf(toArray.ElementType);
+        return fromUnderlying != SpecialType.None && fromUnderlying == toUnderlying;
+    }
+
+    private static SpecialType UnderlyingPrimitiveOf(ITypeSymbol type) =>
+        type is INamedTypeSymbol { EnumUnderlyingType: { } underlying } ? underlying.SpecialType : type.SpecialType;
 
     private ExpressionSyntax CreateCast(ExpressionSyntax csNode, ITypeSymbol vbConvertedType)
     {
@@ -569,8 +598,19 @@ internal class TypeConversionAnalyzer
                  nullableTargetType != null && currentType.SpecialType == SpecialType.System_Object) {
             // We don't have matching Conversions method
             // or there is a cast from Object to Nullable that doesn't require Conversions
-            return TryCreateUserDefinedConversionThroughIntermediate(vbNode, csNode, currentType, targetType)
-                   ?? CreateCast(csNode, targetType);
+            if (TryCreateUserDefinedConversionThroughIntermediate(vbNode, csNode, currentType, targetType) is { } viaUserDefined) {
+                return viaUserDefined;
+            }
+            // The CLR allows an array cast between an enum and its underlying type
+            // (`Byte()` -> `PurchaseOrderStatus()`), and VB uses it freely. The C#
+            // COMPILER refuses it (CS0030) even though the runtime accepts the
+            // identical IL, so route through object.
+            if (IsClrOnlyArrayCast(currentType, targetType)) {
+                csNode = ValidSyntaxFactory.CastExpression(
+                    GetTypeSyntax(_semanticModel.Compilation.GetSpecialType(SpecialType.System_Object)),
+                    csNode.AddParens());
+            }
+            return CreateCast(csNode, targetType);
         } else {
             // Need to use Conversions rather than Convert to match what VB does, eg. Conversions.ToInteger(True) -> -1
             memberAccess = GetConversionsMemberAccess(methodId.Name);
