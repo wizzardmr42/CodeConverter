@@ -630,6 +630,23 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
 
         var csExpression = await node.Expression.AcceptAsync<ExpressionSyntax>(_expressionVisitor);
         csExpression = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(node.Expression, csExpression);
+
+        // A local widened by WidenTypeForReassignments no longer has the VB
+        // declared type the conversion analyzer reasons from, so returning it can
+        // need a cast the analyzer cannot see: VB infers `List(Of T)` and reports
+        // an identity conversion, while the C# local is now `IEnumerable<T>`
+        // against a `List<T>` return (CS0266). A cast is the faithful emission --
+        // Option Strict Off made the VB reassignment a RUNTIME conversion too.
+        // Tree-identity guard: GetSymbolInfo throws "Node is not within syntax
+        // tree" for an expression from another tree, which reaches here via
+        // synthesized/lambda bodies.
+        if (node.Expression != null && _semanticModel.SyntaxTree == node.Expression.SyntaxTree
+            && _semanticModel.GetSymbolInfo(node.Expression).Symbol is ILocalSymbol returnedLocal
+            && CommonConversions.WidenedReassignedLocals.Contains(returnedLocal)
+            && _semanticModel.GetTypeInfo(node.Expression).ConvertedType is { } returnTarget) {
+            csExpression = ValidSyntaxFactory.CastExpression(
+                CommonConversions.GetTypeSyntax(returnTarget), csExpression.AddParens());
+        }
         return SingleStatement(SyntaxFactory.ReturnStatement(csExpression));
     }
 
