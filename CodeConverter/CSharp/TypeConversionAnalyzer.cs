@@ -125,7 +125,7 @@ internal class TypeConversionAnalyzer
                 if (vbType is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } srcInvoke }
                     && vbConvertedType is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } tgtInvoke }
                     && !SymbolEqualityComparer.Default.Equals(vbType, vbConvertedType)) {
-                    return CreateDelegateRelaxationWrapper(csNode, srcInvoke, tgtInvoke);
+                    return CreateDelegateRelaxationWrapper(vbNode, csNode, srcInvoke, tgtInvoke);
                 }
                 if (TryCreateUserDefinedConversionThroughIntermediate(vbNode, csNode, vbType, vbConvertedType) is { } viaOperator) {
                     return viaOperator;
@@ -183,11 +183,24 @@ internal class TypeConversionAnalyzer
     /// return for a `bool` target uses a cast — VB's narrowing throws on null,
     /// and so does `.Value` via the cast).
     /// </summary>
-    private ExpressionSyntax CreateDelegateRelaxationWrapper(ExpressionSyntax csNode, IMethodSymbol srcInvoke, IMethodSymbol tgtInvoke)
+    private ExpressionSyntax CreateDelegateRelaxationWrapper(VBSyntax.ExpressionSyntax vbNode, ExpressionSyntax csNode, IMethodSymbol srcInvoke, IMethodSymbol tgtInvoke)
     {
         var paramNames = tgtInvoke.Parameters.Select((p, i) => "relaxArg" + (i + 1)).ToList();
+        // The ARGUMENTS need converting as well as the return value: relaxing
+        // Func(Of Integer, String) to Func(Of Decimal, String) means each call
+        // narrows Decimal -> Integer. Route that through the VB conversion helper
+        // rather than a C# cast — VB narrowing uses banker's rounding while `(int)`
+        // truncates, so `(int)relaxArg1` would silently change results (3.5 -> 3
+        // instead of 4) in, among other things, a package-dimension warning.
         var invokeArgs = SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(
-            paramNames.Select(n => SyntaxFactory.Argument(ValidSyntaxFactory.IdentifierName(n)))));
+            paramNames.Select((n, i) => {
+                ExpressionSyntax arg = ValidSyntaxFactory.IdentifierName(n);
+                if (i < srcInvoke.Parameters.Length &&
+                    !SymbolEqualityComparer.Default.Equals(tgtInvoke.Parameters[i].Type, srcInvoke.Parameters[i].Type)) {
+                    arg = AddExplicitConvertTo(vbNode, arg, tgtInvoke.Parameters[i].Type, srcInvoke.Parameters[i].Type);
+                }
+                return SyntaxFactory.Argument(arg);
+            })));
         // A parenthesized simple callee makes `(matchFunc)(arg)` parse as a
         // cast treating matchFunc as a type name (CS0118) — keep identifier
         // and member-access callees bare.
