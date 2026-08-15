@@ -951,13 +951,8 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                     node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide),
                     toStringCall);
             } else if (rightType != null && !SymbolEqualityComparer.Default.Equals(rightType, leftUnderlying)
-                       // A fallback that is ITSELF `T?` already shares a type with the
-                       // left under `??`, and `T? ?? T?` is legitimately `T?`. Casting
-                       // it down to bare T made the whole coalesce non-nullable, which
-                       // then broke every nullable operation applied to the RESULT:
-                       // `(a ?? b)?.ToString()` became `?.` on a non-nullable (CS0023)
-                       // and `(a ?? b).HasValue` stopped resolving (CS1061). VB keeps
-                       // `If(a, b)` nullable when both arms are.
+                       // A fallback ALREADY of exactly `T?` needs nothing: `T? ?? T?` is
+                       // legitimately `T?`.
                        && !(rightType.IsNullable(out var rightUnderlying)
                             && SymbolEqualityComparer.Default.Equals(rightUnderlying, leftUnderlying))
                        && (leftUnderlying.IsNumericType() || leftUnderlying.SpecialType == SpecialType.System_Boolean
@@ -968,8 +963,22 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 // `decimal? ?? 0.00d` (CS0019). Also covers DBNull/bool/other fallbacks
                 // that VB converts implicitly. Convert the fallback to the underlying
                 // type so the two `??` operands share one.
+                //
+                // Convert to `T?` rather than bare `T` when the fallback is ITSELF
+                // nullable of a DIFFERENT underlying type — `If(Decimal?, Integer?)`.
+                // VB widens Integer? to Decimal? and the result stays nullable;
+                // casting to bare decimal made the whole coalesce non-nullable, so
+                // `.Sum()` over the sequence returned decimal and every later
+                // `.HasValue` / `.Value` stopped resolving (CS1061), far from here.
+                // The equal-underlying case is already skipped by the guard above;
+                // this is the widening case it did not cover.
+                var coalesceTarget = leftUnderlying;
+                if (rightType.IsNullable(out _)) {
+                    coalesceTarget = _semanticModel.Compilation
+                        .GetSpecialType(SpecialType.System_Nullable_T).Construct(leftUnderlying);
+                }
                 rightForBinary = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
-                    node.SecondExpression, rightSide, forceTargetType: leftUnderlying);
+                    node.SecondExpression, rightSide, forceTargetType: coalesceTarget);
             }
         }
         var expr = SyntaxFactory.BinaryExpression(SyntaxKind.CoalesceExpression, leftForBinary, rightForBinary);
