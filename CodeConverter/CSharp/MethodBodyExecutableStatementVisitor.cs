@@ -352,9 +352,14 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         // the operator method: `q = T.op_Concatenate(q, part)` for a metadata type,
         // or `q = q + part` once the declaration has been converted to `operator +`.
         // Emitting `q += part` produced CS0019 on the type.
+        // Resolve the operator from the LHS TYPE rather than GetSymbolInfo/GetOperation
+        // on the assignment statement — neither surfaces the user-defined operator
+        // for a VB compound assignment, so an earlier attempt keyed on those silently
+        // never fired.
         if (node.IsKind(VBasic.SyntaxKind.ConcatenateAssignmentStatement)
-            && _semanticModel.GetSymbolInfo(node).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } concatOp
-            && concatOp.Name == WellKnownMemberNames.ConcatenateOperatorName) {
+            && lhsTypeInfo.Type is { SpecialType: not SpecialType.System_String and not SpecialType.System_Object }
+            && lhsTypeInfo.Type.GetMembers(WellKnownMemberNames.ConcatenateOperatorName)
+                   .OfType<IMethodSymbol>().FirstOrDefault() is { } concatOp) {
             ExpressionSyntax concatCall = concatOp.ContainingType.IsDefinedInSource()
                 ? SyntaxFactory.BinaryExpression(SyntaxKind.AddExpression, lhs, rhs)
                 : SyntaxFactory.InvocationExpression(
