@@ -972,13 +972,31 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 // `.HasValue` / `.Value` stopped resolving (CS1061), far from here.
                 // The equal-underlying case is already skipped by the guard above;
                 // this is the widening case it did not cover.
-                var coalesceTarget = leftUnderlying;
-                if (rightType.IsNullable(out _)) {
-                    coalesceTarget = _semanticModel.Compilation
-                        .GetSpecialType(SpecialType.System_Nullable_T).Construct(leftUnderlying);
+                // VB does not always target-type the fallback to the LEFT: it takes
+                // the DOMINANT type of the two, and Double/Single are wider than
+                // Decimal. `If(decimalSum, 0.00)` is therefore Double, and VB does
+                // the surrounding arithmetic in Double. Narrowing that 0.00 to
+                // decimal left `(double)x - decimalY` (CS0019) at the enclosing
+                // operator. Widen the LEFT instead, as the enum-overflow branch
+                // above already does for its own case.
+                bool rightIsWiderFloat =
+                    rightType.SpecialType is SpecialType.System_Double or SpecialType.System_Single &&
+                    leftUnderlying.SpecialType == SpecialType.System_Decimal;
+                if (rightIsWiderFloat) {
+                    var nullableFloat = _semanticModel.Compilation
+                        .GetSpecialType(SpecialType.System_Nullable_T).Construct(rightType);
+                    leftForBinary = ValidSyntaxFactory.CastExpression(
+                        CommonConversions.GetTypeSyntax(nullableFloat),
+                        node.FirstExpression.ParenthesizeIfPrecedenceCouldChange(leftSide));
+                } else {
+                    var coalesceTarget = leftUnderlying;
+                    if (rightType.IsNullable(out _)) {
+                        coalesceTarget = _semanticModel.Compilation
+                            .GetSpecialType(SpecialType.System_Nullable_T).Construct(leftUnderlying);
+                    }
+                    rightForBinary = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
+                        node.SecondExpression, rightSide, forceTargetType: coalesceTarget);
                 }
-                rightForBinary = CommonConversions.TypeConversionAnalyzer.AddExplicitConversion(
-                    node.SecondExpression, rightSide, forceTargetType: coalesceTarget);
             }
         }
         var expr = SyntaxFactory.BinaryExpression(SyntaxKind.CoalesceExpression, leftForBinary, rightForBinary);
