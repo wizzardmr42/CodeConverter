@@ -894,6 +894,18 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
             return leftSide;
         }
 
+        // Same redundancy, detected from the CONVERTED left rather than the VB
+        // shape: if the nullable-bool transform already appended `== true`, the
+        // null case is folded to false and the result is plain `bool`, so
+        // `?? false` is both redundant and CS0019. Keying on the emitted form
+        // covers every producer of that transform — the VB-shape test above lists
+        // only comparison kinds, so `If(a.HasValue AndAlso a = b, False)` (an
+        // AndAlso) slipped past it.
+        if (node.SecondExpression.SkipIntoParens().IsKind(VBasic.SyntaxKind.FalseLiteralExpression)
+            && YieldsPlainBoolViaTrueComparison(leftSide)) {
+            return leftSide;
+        }
+
         // `If(maybeDecimal, DBNull.Value)` — the ubiquitous SqlParameter idiom.
         // VB unifies the two arms at Object. There is no conversion between a
         // value type and DBNull in either direction, so every attempt to give
@@ -1006,6 +1018,22 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
 
         return expr;
     }
+
+    /// <summary>
+    /// True when the converted expression already ends in the nullable-bool
+    /// transform's `== true`, so it is plain `bool` and folds null to false
+    /// exactly as VB's `If(x, False)` does. `== true` binds tighter than `&amp;&amp;`
+    /// / `||`, so it sits at the end of the right spine rather than at the root —
+    /// checking only the root missed `a.HasValue &amp;&amp; a == b == true`.
+    /// </summary>
+    private static bool YieldsPlainBoolViaTrueComparison(ExpressionSyntax converted) =>
+        converted.SkipIntoParens() switch {
+            BinaryExpressionSyntax b when b.IsKind(SyntaxKind.EqualsExpression)
+                                          && b.Right.IsKind(SyntaxKind.TrueLiteralExpression) => true,
+            BinaryExpressionSyntax b when b.IsKind(SyntaxKind.LogicalAndExpression)
+                                          || b.IsKind(SyntaxKind.LogicalOrExpression) => YieldsPlainBoolViaTrueComparison(b.Right),
+            _ => false
+        };
 
     public override async Task<CSharpSyntaxNode> VisitTernaryConditionalExpression(VBasic.Syntax.TernaryConditionalExpressionSyntax node)
     {
