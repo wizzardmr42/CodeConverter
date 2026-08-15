@@ -1393,6 +1393,21 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         // VB doesn't have a specialized node for element access because the syntax is ambiguous. Instead, it just uses an invocation expression or dictionary access expression, then figures out using the semantic model which one is most likely intended.
         // https://github.com/dotnet/roslyn/blob/master/src/Workspaces/VisualBasic/Portable/LanguageServices/VisualBasicSyntaxFactsService.vb#L768
         (var convertedExpression, bool shouldBeElementAccess) = await ConvertInvocationSubExpressionAsync(node, operation, expressionSymbol, expressionReturnType, expr);
+
+        // VB can index a NON-GENERIC System.Array directly (`Function F(data As
+        // Array)` then `data(i)`); C# has no indexer on System.Array, so `data(i)`
+        // came out as a method call (CS0149 "Method name expected"). GetValue is
+        // what VB itself calls, and returns Object just as VB's expression does.
+        if (expressionType?.SpecialType == SpecialType.System_Array
+            && node.ArgumentList?.Arguments.Count > 0) {
+            var indexArgs = await node.ArgumentList.Arguments
+                .AcceptSeparatedListAsync<VBSyntax.ArgumentSyntax, ArgumentSyntax>(TriviaConvertingExpressionVisitor);
+            return SyntaxFactory.InvocationExpression(
+                SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                    convertedExpression, ValidSyntaxFactory.IdentifierName(nameof(Array.GetValue))),
+                SyntaxFactory.ArgumentList(indexArgs));
+        }
+
         if (shouldBeElementAccess)
         {
             return await CreateElementAccessAsync(node, convertedExpression);
