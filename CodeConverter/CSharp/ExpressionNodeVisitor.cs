@@ -760,7 +760,12 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         // `new[]` requires a best common type among the elements (CS0826), so
         // spell the element type out when reference-typed elements differ
         // from it.
-        bool needsExplicitElementType = elementType.IsReferenceType && node.Initializers.Any(i =>
+        // Also spell it out when the elements are VALUE types narrower than the
+        // target's element type. VB target-types an array literal — `GetTotal(DB,
+        // {po.ID}, False)` against `IEnumerable(Of Integer?)` genuinely builds an
+        // `Integer?()`. C#'s `new[]` infers from the ELEMENTS instead, giving
+        // `int[]`, which then won't convert to `IEnumerable<int?>` (CS1503).
+        bool needsExplicitElementType = node.Initializers.Any(i =>
             _semanticModel.GetTypeInfo(i).Type is { } initType && !SymbolEqualityComparer.Default.Equals(initType, elementType));
         if (hasExpressionToInferTypeFrom && !needsExplicitElementType) {
             var commas = Enumerable.Repeat(SyntaxFactory.Token(SyntaxKind.CommaToken), dimensions - 1);
