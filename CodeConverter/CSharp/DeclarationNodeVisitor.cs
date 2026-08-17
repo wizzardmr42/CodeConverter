@@ -246,7 +246,10 @@ internal class DeclarationNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSh
                     _typeContext.PerScopeState.PopScope();
                 }
             });
-            return WithAdditionalMembers(membersFromBase.Concat(convertedMembers)).ToArray();//Ensure evaluated before popping type context
+            // Classes standing in for mutated VB anonymous types, registered by the expression
+            // visitor while the members above were converted, so only readable after that.
+            var generatedAnonymousTypes = _typeContext.GeneratedAnonymousTypes.Declarations;
+            return WithAdditionalMembers(membersFromBase.Concat(convertedMembers).Concat(generatedAnonymousTypes)).ToArray();//Ensure evaluated before popping type context
         } finally {
             _typeContext.Pop();
         }

@@ -1308,6 +1308,92 @@ internal partial class Issue480
     }
 
     [Fact]
+    public async Task MutatedAnonymousTypeBecomesANamedClassAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"Class TestClass
+    Function TestMethod(fail As Boolean) As Object
+        Dim ret = New With {.Success = False, .Message = """"}
+        If fail Then
+            ret.Message = ""nope""
+        Else
+            ret.Success = True
+        End If
+        Return ret
+    End Function
+End Class", @"
+internal partial class TestClass
+{
+    public object TestMethod(bool fail)
+    {
+        var ret = new TestMethodAnonymousType { Success = false, Message = """" };
+        if (fail)
+        {
+            ret.Message = ""nope"";
+        }
+        else
+        {
+            ret.Success = true;
+        }
+        return ret;
+    }
+
+    // Stands in for a VB anonymous type that was assigned to after creation, which a C# anonymous type cannot be.
+    private sealed class TestMethodAnonymousType
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; }
+    }
+}");
+    }
+
+    [Fact]
+    public async Task UnmutatedAnonymousTypeStaysAnonymousAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"Class TestClass
+    Function TestMethod() As Object
+        Dim ret = New With {.Success = False, .Message = """"}
+        Return ret
+    End Function
+End Class", @"
+internal partial class TestClass
+{
+    public object TestMethod()
+    {
+        var ret = new { Success = false, Message = """" };
+        return ret;
+    }
+}");
+    }
+
+    /// <summary>
+    /// VB gives a Key-bearing anonymous type value equality over its Key members, which a
+    /// generated class would silently turn into reference equality, so these are left alone
+    /// even though the write to the non-Key member still won't compile.
+    /// </summary>
+    [Fact]
+    public async Task MutatedAnonymousTypeWithAKeyMemberStaysAnonymousAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"Class TestClass
+    Function TestMethod() As Object
+        Dim ret = New With {Key .Id = 1, .Message = """"}
+        ret.Message = ""set""
+        Return ret
+    End Function
+End Class", @"
+internal partial class TestClass
+{
+    public object TestMethod()
+    {
+        var ret = new { Id = 1, Message = """" };
+        ret.Message = ""set"";
+        return ret;
+    }
+}
+1 target compilation errors:
+CS0200: Property or indexer '<anonymous type: int Id, string Message>.Message' cannot be assigned to -- it is read only");
+    }
+
+    [Fact]
     public async Task Issue949_AnonymousWithBlockMemberSelfAccessAsync()
     {
         await TestConversionVisualBasicToCSharpAsync(@"Dim anonymousType1 = New With {

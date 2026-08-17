@@ -39,6 +39,7 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
     private readonly VisualBasicNullableExpressionsConverter _visualBasicNullableTypesConverter;
     private readonly Dictionary<string, Stack<(SyntaxNode Scope, string TempName)>> _tempNameForAnonymousScope = new();
     private readonly HashSet<string> _generatedNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<VBSyntax.TypeBlockSyntax, HashSet<INamedTypeSymbol>> _mutatedAnonymousTypesByContainingType = new();
 
     public ExpressionNodeVisitor(SemanticModel semanticModel,
         VisualBasicEqualityComparison visualBasicEqualityComparison, ITypeContext typeContext, CommonConversions commonConversions,
@@ -630,6 +631,19 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         var vbInitializers = node.Initializer.Initializers;
         try {
             var initializers = await vbInitializers.AcceptSeparatedListAsync<VBSyntax.FieldInitializerSyntax, AnonymousObjectMemberDeclaratorSyntax>(TriviaConvertingExpressionVisitor);
+            if (TryGetGeneratedTypeForMutatedAnonymousType(node, out var generatedTypeName, out var propertyNames)) {
+                // The members are positional in both the VB initializer and the anonymous type
+                // symbol, so an initializer's converted expression pairs with the property at
+                // the same index - the declarator's own NameEquals is absent whenever C# could
+                // have inferred the name, so it can't be relied on here.
+                var assignments = initializers.Select((initializer, i) => (ExpressionSyntax)SyntaxFactory.AssignmentExpression(
+                    SyntaxKind.SimpleAssignmentExpression,
+                    ValidSyntaxFactory.IdentifierName(propertyNames[i]),
+                    initializer.Expression));
+                return SyntaxFactory.ObjectCreationExpression(ValidSyntaxFactory.IdentifierName(generatedTypeName))
+                    .WithInitializer(SyntaxFactory.InitializerExpression(SyntaxKind.ObjectInitializerExpression,
+                        SyntaxFactory.SeparatedList(assignments)));
+            }
             return SyntaxFactory.AnonymousObjectCreationExpression(initializers);
         } finally {
             var kvpsToPop = _tempNameForAnonymousScope.Where(t => t.Value.Peek().Scope == node).ToArray();
@@ -658,6 +672,108 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 converted);
         }
         return SyntaxFactory.AnonymousObjectMemberDeclarator(converted);
+    }
+
+    /// <summary>
+    /// VB anonymous type members are mutable unless marked Key; C# anonymous type members are
+    /// always read-only, so `Dim ret = New With {.Success = False} : ret.Success = True`
+    /// converts to CS0200 "property cannot be assigned to". Where the VB type is written to,
+    /// substitute a generated named class with settable properties.
+    ///
+    /// Only keyless anonymous types qualify. VB gives a Key-bearing anonymous type value
+    /// equality over its Key members, which a plain class would not reproduce; a keyless one
+    /// has plain reference equality, which is exactly what the generated class gives it (and
+    /// is a closer match than the C# anonymous type's value equality over every member).
+    /// </summary>
+    private bool TryGetGeneratedTypeForMutatedAnonymousType(VBSyntax.AnonymousObjectCreationExpressionSyntax node,
+        out string generatedTypeName, out string[] propertyNames)
+    {
+        generatedTypeName = null;
+        propertyNames = null;
+
+        if (!_typeContext.Any() || _semanticModel.SyntaxTree != node.SyntaxTree) return false;
+        if (_semanticModel.GetTypeInfo(node).Type is not INamedTypeSymbol { IsAnonymousType: true } anonymousType) return false;
+
+        var vbInitializers = node.Initializer.Initializers;
+        if (vbInitializers.Any(i => i.KeyKeyword.IsKind(VBasic.SyntaxKind.KeyKeyword))) return false;
+
+        var properties = anonymousType.GetMembers().OfType<IPropertySymbol>().ToArray();
+        // Key members are the read-only ones, so this is the same rule as the syntactic check
+        // above - but it also catches anything else that could not be assigned in an initializer.
+        if (properties.Length != vbInitializers.Count || properties.Any(p => p.IsReadOnly)) return false;
+        if (!properties.All(p => IsNameableOutsideThisExpression(p.Type))) return false;
+
+        propertyNames = properties.Select(p => CommonConversions.CsEscapedIdentifier(p.Name).ValueText).ToArray();
+
+        if (_typeContext.GeneratedAnonymousTypes.TryGetName(anonymousType, out generatedTypeName)) return true;
+        if (!IsAnonymousTypeMutatedInContainingType(node, anonymousType)) return false;
+
+        generatedTypeName = GenerateUniqueVariableName(node, GetAnonymousTypeClassNameBase(node));
+        _typeContext.GeneratedAnonymousTypes.Add(anonymousType, generatedTypeName,
+            CreateClassForAnonymousType(generatedTypeName, properties, propertyNames));
+        return true;
+    }
+
+    /// <summary>
+    /// A generated class can only name types that are in scope where it is declared - as a
+    /// member of the converted type. That rules out anonymous types (including anonymous
+    /// delegates from lambda members) and a containing method's type parameters, but not the
+    /// containing type's, which a nested class still has access to.
+    /// </summary>
+    private static bool IsNameableOutsideThisExpression(ITypeSymbol type) => type switch {
+        IArrayTypeSymbol a => IsNameableOutsideThisExpression(a.ElementType),
+        ITypeParameterSymbol tp => tp.TypeParameterKind == TypeParameterKind.Type,
+        INamedTypeSymbol n => !n.IsAnonymousType && n.TypeKind != TypeKind.Error && n.TypeArguments.All(IsNameableOutsideThisExpression),
+        _ => false
+    };
+
+    /// <summary>
+    /// Scanned across the whole containing type rather than just the containing method, to
+    /// match the scope the generated class is shared over. Cached because a type with many
+    /// anonymous types would otherwise walk itself once per creation site.
+    /// </summary>
+    private bool IsAnonymousTypeMutatedInContainingType(VBSyntax.AnonymousObjectCreationExpressionSyntax node, INamedTypeSymbol anonymousType)
+    {
+        var containingType = node.GetAncestor<VBSyntax.TypeBlockSyntax>();
+        if (containingType is null) return false;
+
+        if (!_mutatedAnonymousTypesByContainingType.TryGetValue(containingType, out var mutated)) {
+#pragma warning disable RS1024 // Compare symbols correctly - SymbolEqualityComparer.Default is what's wanted here, the analyzer just can't see it through the ctor
+            mutated = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+#pragma warning restore RS1024
+            foreach (var assignment in containingType.DescendantNodes().OfType<VBSyntax.AssignmentStatementSyntax>()) {
+                if (assignment.Left is not VBSyntax.MemberAccessExpressionSyntax memberAccess) continue;
+                if (_semanticModel.GetSymbolInfo(memberAccess).Symbol is IPropertySymbol { ContainingType: { IsAnonymousType: true } assignedTo }) {
+                    mutated.Add(assignedTo);
+                }
+            }
+            _mutatedAnonymousTypesByContainingType.Add(containingType, mutated);
+        }
+
+        return mutated.Contains(anonymousType);
+    }
+
+    private static string GetAnonymousTypeClassNameBase(VBSyntax.AnonymousObjectCreationExpressionSyntax node)
+    {
+        var containingMethodName = node.Ancestors().OfType<VBSyntax.MethodBlockSyntax>().FirstOrDefault()
+            ?.SubOrFunctionStatement.Identifier.ValueText;
+        return containingMethodName is null or "" ? "AnonymousType" : containingMethodName + "AnonymousType";
+    }
+
+    private ClassDeclarationSyntax CreateClassForAnonymousType(string name, IPropertySymbol[] properties, string[] propertyNames)
+    {
+        var autoProperties = properties.Select((p, i) => (MemberDeclarationSyntax)SyntaxFactory
+            .PropertyDeclaration(CommonConversions.GetTypeSyntax(p.Type), propertyNames[i])
+            .WithModifiers(SyntaxFactory.TokenList(SyntaxFactory.Token(SyntaxKind.PublicKeyword)))
+            .WithAccessorList(SyntaxFactory.AccessorList(SyntaxFactory.List(new[] {
+                SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)),
+                SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
+            }))));
+
+        return SyntaxFactory.ClassDeclaration(name)
+            .WithModifiers(SyntaxFactory.TokenList(SyntaxFactory.Token(SyntaxKind.PrivateKeyword), SyntaxFactory.Token(SyntaxKind.SealedKeyword)))
+            .WithMembers(SyntaxFactory.List(autoProperties))
+            .WithLeadingTrivia(SyntaxFactory.Comment("// Stands in for a VB anonymous type that was assigned to after creation, which a C# anonymous type cannot be."), SyntaxFactory.ElasticCarriageReturnLineFeed);
     }
 
     /// <summary>C# infers an anonymous-type member name only from a simple name or a member access.</summary>
