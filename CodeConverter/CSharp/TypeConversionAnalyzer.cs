@@ -134,7 +134,7 @@ internal class TypeConversionAnalyzer
                 // type (`Byte()` -> `PurchaseOrderStatus()`), and VB uses it freely.
                 // The C# COMPILER refuses it (CS0030) even though the runtime would
                 // accept the identical IL, so route through object.
-                if (IsClrOnlyArrayCast(vbType, vbConvertedType)) {
+                if (IsArrayCastCsRefusesButVbEmits(vbType, vbConvertedType)) {
                     var viaObject = ValidSyntaxFactory.CastExpression(
                         GetTypeSyntax(_semanticModel.Compilation.GetSpecialType(SpecialType.System_Object)),
                         csNode.AddParens());
@@ -242,20 +242,52 @@ internal class TypeConversionAnalyzer
     }
 
     /// <summary>
-    /// True for an array-to-array cast the CLR permits but C# rejects: the element
-    /// types share an underlying primitive but differ, i.e. one is an enum over the
-    /// other. Deliberately narrow — `int[]` to `IEnumerable&lt;short&gt;` must NOT
-    /// match, because that is invalid at runtime too and needs a real projection,
-    /// and routing it through object would turn a compile error into a crash.
+    /// An array cast the C# COMPILER refuses (CS0030) but VB compiles anyway, as a
+    /// *runtime* cast. Routing through object emits exactly what VB emits.
+    ///
+    /// Two shapes arrive here and both need that same emission:
+    ///  - casts the CLR accepts, between an enum array and an array of its underlying
+    ///    type (`Byte()` -> `PurchaseOrderStatus()`), which VB uses freely and which
+    ///    work at runtime;
+    ///  - casts the CLR rejects too, `Integer()` -> `IEnumerable(Of Short)`.
+    ///
+    /// An earlier version of this deliberately excluded the second shape, reasoning
+    /// that routing it through object "would turn a compile error into a crash". That
+    /// was wrong, and decompiling the VB settled it: VB emits
+    /// `(IEnumerable&lt;short&gt;)(object)arr` and therefore *already* crashes there.
+    /// So the choice is not crash-vs-no-crash, it is faithful-vs-not: emitting a
+    /// projection instead would silently repair a live bug in the middle of a language
+    /// port, hiding it exactly when someone is watching the two versions for
+    /// differences. Emit what VB emits; raise the bug separately.
     /// </summary>
-    private static bool IsClrOnlyArrayCast(ITypeSymbol from, ITypeSymbol to)
+    private static bool IsArrayCastCsRefusesButVbEmits(ITypeSymbol from, ITypeSymbol to)
     {
-        if (from is not IArrayTypeSymbol { Rank: 1 } fromArray || to is not IArrayTypeSymbol { Rank: 1 } toArray) return false;
-        if (SymbolEqualityComparer.Default.Equals(fromArray.ElementType, toArray.ElementType)) return false;
-        var fromUnderlying = UnderlyingPrimitiveOf(fromArray.ElementType);
-        var toUnderlying = UnderlyingPrimitiveOf(toArray.ElementType);
-        return fromUnderlying != SpecialType.None && fromUnderlying == toUnderlying;
+        if (from is not IArrayTypeSymbol { Rank: 1 } fromArray) return false;
+
+        if (to is IArrayTypeSymbol { Rank: 1 } toArray) {
+            if (SymbolEqualityComparer.Default.Equals(fromArray.ElementType, toArray.ElementType)) return false;
+            var fromUnderlying = UnderlyingPrimitiveOf(fromArray.ElementType);
+            var toUnderlying = UnderlyingPrimitiveOf(toArray.ElementType);
+            return fromUnderlying != SpecialType.None && fromUnderlying == toUnderlying;
+        }
+
+        // `T[]` satisfies these directly, so C# only refuses when the element types
+        // differ by more than a reference conversion - i.e. when either side is a value
+        // type. Reference-element covariance is legal C# and must be left alone.
+        if (to is not INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } toInterface) return false;
+        if (!ArrayImplementedCollectionInterfaces.Contains(toInterface.OriginalDefinition.SpecialType)) return false;
+        var toElement = toInterface.TypeArguments[0];
+        return !SymbolEqualityComparer.Default.Equals(fromArray.ElementType, toElement) &&
+               (fromArray.ElementType.IsValueType || toElement.IsValueType);
     }
+
+    private static readonly SpecialType[] ArrayImplementedCollectionInterfaces = {
+        SpecialType.System_Collections_Generic_IEnumerable_T,
+        SpecialType.System_Collections_Generic_ICollection_T,
+        SpecialType.System_Collections_Generic_IList_T,
+        SpecialType.System_Collections_Generic_IReadOnlyCollection_T,
+        SpecialType.System_Collections_Generic_IReadOnlyList_T
+    };
 
     private static SpecialType UnderlyingPrimitiveOf(ITypeSymbol type) =>
         type is INamedTypeSymbol { EnumUnderlyingType: { } underlying } ? underlying.SpecialType : type.SpecialType;
@@ -605,7 +637,7 @@ internal class TypeConversionAnalyzer
             // (`Byte()` -> `PurchaseOrderStatus()`), and VB uses it freely. The C#
             // COMPILER refuses it (CS0030) even though the runtime accepts the
             // identical IL, so route through object.
-            if (IsClrOnlyArrayCast(currentType, targetType)) {
+            if (IsArrayCastCsRefusesButVbEmits(currentType, targetType)) {
                 csNode = ValidSyntaxFactory.CastExpression(
                     GetTypeSyntax(_semanticModel.Compilation.GetSpecialType(SpecialType.System_Object)),
                     csNode.AddParens());

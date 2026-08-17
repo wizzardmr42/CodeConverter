@@ -2580,6 +2580,51 @@ public static partial class M
 }");
     }
 
+    /// <summary>
+    /// StrategyManager PurchaseOrderController: an `Integer()` model property passed to
+    /// a `IEnumerable(Of ChannelID)` parameter, where `ChannelID = System.Int16`.
+    ///
+    /// Unlike the enum-array case below, this one is invalid at RUNTIME too - an
+    /// `Int32[]` does not implement `IEnumerable&lt;short&gt;`. It is pinned here
+    /// because VB emits it anyway: decompiling the VB assembly gives
+    /// `new BlockedChannelModel((IEnumerable&lt;short&gt;)(object)m.BlockedListingChannels)`,
+    /// so the VB already throws at this line. Emitting a projection to make it "work"
+    /// would repair a live bug during a language port and hide it from anyone
+    /// comparing the two versions - so emit the cast VB emits, and raise the bug.
+    /// </summary>
+    [Fact]
+    public async Task ArrayToCollectionInterfaceOfADifferentValueTypeCastsViaObjectAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"Imports System.Collections.Generic
+
+Public Class Taker
+    Public Sub New(ids As IEnumerable(Of Short))
+    End Sub
+End Class
+
+Public Class TestClass
+    Public Function Make(blocked As Integer()) As Taker
+        Return New Taker(blocked)
+    End Function
+End Class",
+            @"using System.Collections.Generic;
+
+public partial class Taker
+{
+    public Taker(IEnumerable<short> ids)
+    {
+    }
+}
+
+public partial class TestClass
+{
+    public Taker Make(int[] blocked)
+    {
+        return new Taker((IEnumerable<short>)(object)blocked);
+    }
+}");
+    }
+
     [Fact]
     public async Task EnumArrayLambdaReturnFromUnderlyingArrayAsync()
     {
