@@ -65,12 +65,62 @@ internal class VisualBasicEqualityComparison
 
     public RequiredType GetObjectEqualityType(VBSyntax.BinaryExpressionSyntax node, TypeInfo leftType, TypeInfo rightType)
     {
-        if (IsWithinQuery) return RequiredType.None;
+        if (IsWithinQuery && MayBeInExpressionTree(node)) return RequiredType.None;
         var typeInfos = new[] { leftType, rightType };
         if (!node.IsKind(VBasic.SyntaxKind.EqualsExpression, VBasic.SyntaxKind.NotEqualsExpression)) {
             return RequiredType.None;
         }
         return GetObjectEqualityType(typeInfos);
+    }
+
+    /// <summary>
+    /// Whether a comparison inside a query might end up in an expression tree, where the
+    /// culture-aware comparison must NOT be emitted.
+    ///
+    /// Under `Option Compare Text` every string comparison is case-insensitive, and this class
+    /// normally emits `CompareInfo.Compare(...)` to reproduce that. Inside a query that was
+    /// skipped wholesale, because a query provider cannot translate that call - EF6 throws
+    /// "LINQ to Entities does not recognize the method". But the skip was too broad: it also
+    /// fired for lambdas over ordinary in-memory collections, where the culture-aware form is
+    /// both correct and perfectly translatable, silently making those comparisons ordinal.
+    ///
+    /// For IQueryable, emitting `==` is genuinely equivalent rather than a compromise: VB puts
+    /// `Operators.CompareString` into the expression tree, EF6 recognises it (it ships a
+    /// translator for exactly that), and both forms become the same SQL comparison, with the
+    /// database collation deciding case sensitivity either way.
+    ///
+    /// Defaults to TRUE on any uncertainty, because the two mistakes are not equally bad:
+    /// wrongly emitting `==` leaves a comparison ordinal, while wrongly emitting
+    /// `CompareInfo.Compare` into an expression tree is a runtime NotSupportedException.
+    /// </summary>
+    private bool MayBeInExpressionTree(VBSyntax.ExpressionSyntax node)
+    {
+        if (_semanticModel.SyntaxTree != node.SyntaxTree) return true;
+
+        foreach (var ancestor in node.Ancestors()) {
+            switch (ancestor) {
+                case VBSyntax.LambdaExpressionSyntax lambda:
+                    // The innermost lambda decides: it is the one being converted to either a
+                    // delegate (runs in memory) or an Expression<...> (handed to a provider).
+                    return _semanticModel.GetTypeInfo(lambda).ConvertedType is not INamedTypeSymbol { TypeKind: TypeKind.Delegate };
+                case VBSyntax.QueryExpressionSyntax query:
+                    // Query-syntax clauses are lambdas the VB tree does not spell out, so fall
+                    // back to what the query reads from.
+                    return QueryMayBeQueryable(query);
+            }
+        }
+        return false;
+    }
+
+    private bool QueryMayBeQueryable(VBSyntax.QueryExpressionSyntax query)
+    {
+        var sources = query.Clauses.OfType<VBSyntax.CollectionRangeVariableSyntax>()
+            .Concat(query.Clauses.OfType<VBSyntax.FromClauseSyntax>().SelectMany(f => f.Variables))
+            .Select(v => _semanticModel.GetTypeInfo(v.Expression).Type)
+            .ToArray();
+
+        if (sources.Length == 0 || sources.Any(t => t is null)) return true;
+        return sources.Any(t => t!.AllInterfaces.Any(i => i.Name == "IQueryable") || t!.Name == "IQueryable");
     }
 
     public RequiredType GetObjectEqualityType(params TypeInfo[] typeInfos)

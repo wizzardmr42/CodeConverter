@@ -326,7 +326,7 @@ internal partial class Test
 End Function", @"private static string FindPicFilePath(List<FileInfo> AList, string picId)
 {
     foreach (FileInfo FileInfo in from FileInfo1 in AList
-                                  where FileInfo1.Name.Substring(0, 6) == picId
+                                  where (FileInfo1.Name.Substring(0, 6) ?? """") == (picId ?? """")
                                   select FileInfo1)
         return FileInfo.FullName;
     return string.Empty;
@@ -1261,7 +1261,7 @@ public static partial class M
         var r = (from u in (from row in src
                             where row.HasUserId
                             select row.User).Distinct()
-                 where u.PasswordHash != """"
+                 where !string.IsNullOrEmpty(u.PasswordHash)
                  orderby u.Surname
                  select u.Surname).ToList();
     }
