@@ -703,14 +703,16 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         if (properties.Length != vbInitializers.Count || properties.Any(p => p.IsReadOnly)) return false;
         if (!properties.All(p => IsNameableOutsideThisExpression(p.Type))) return false;
 
-        propertyNames = properties.Select(p => CommonConversions.CsEscapedIdentifier(p.Name).ValueText).ToArray();
+        // Left unescaped: both use sites escape, and an anonymous type member is free to be
+        // named for a C# keyword the VB source has no reason to avoid (`New With {.out = 1}`).
+        propertyNames = properties.Select(p => p.Name).ToArray();
 
         if (_typeContext.GeneratedAnonymousTypes.TryGetName(anonymousType, out generatedTypeName)) return true;
         if (!IsAnonymousTypeMutatedInContainingType(node, anonymousType)) return false;
 
         generatedTypeName = GenerateUniqueVariableName(node, GetAnonymousTypeClassNameBase(node));
         _typeContext.GeneratedAnonymousTypes.Add(anonymousType, generatedTypeName,
-            CreateClassForAnonymousType(generatedTypeName, properties, propertyNames));
+            CreateClassForAnonymousType(generatedTypeName, properties));
         return true;
     }
 
@@ -760,10 +762,10 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
         return containingMethodName is null or "" ? "AnonymousType" : containingMethodName + "AnonymousType";
     }
 
-    private ClassDeclarationSyntax CreateClassForAnonymousType(string name, IPropertySymbol[] properties, string[] propertyNames)
+    private ClassDeclarationSyntax CreateClassForAnonymousType(string name, IPropertySymbol[] properties)
     {
-        var autoProperties = properties.Select((p, i) => (MemberDeclarationSyntax)SyntaxFactory
-            .PropertyDeclaration(CommonConversions.GetTypeSyntax(p.Type), propertyNames[i])
+        var autoProperties = properties.Select(p => (MemberDeclarationSyntax)SyntaxFactory
+            .PropertyDeclaration(CommonConversions.GetTypeSyntax(p.Type), CommonConversions.CsEscapedIdentifier(p.Name))
             .WithModifiers(SyntaxFactory.TokenList(SyntaxFactory.Token(SyntaxKind.PublicKeyword)))
             .WithAccessorList(SyntaxFactory.AccessorList(SyntaxFactory.List(new[] {
                 SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)),

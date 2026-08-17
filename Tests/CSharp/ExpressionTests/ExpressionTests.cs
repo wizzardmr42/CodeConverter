@@ -1346,6 +1346,38 @@ internal partial class TestClass
 }");
     }
 
+    /// <summary>
+    /// Members of a JSON payload are routinely lowercased to match what the script reading it
+    /// expects, and nothing stops one landing on a C# keyword that VB had no reason to avoid.
+    /// </summary>
+    [Fact]
+    public async Task MutatedAnonymousTypeEscapesMembersNamedForACSharpKeywordAsync()
+    {
+        await TestConversionVisualBasicToCSharpAsync(@"Class TestClass
+    Function TestMethod() As Object
+        Dim ret = New With {.url = """", .params = """"}
+        ret.url = ""/somewhere""
+        Return ret
+    End Function
+End Class", @"
+internal partial class TestClass
+{
+    public object TestMethod()
+    {
+        var ret = new TestMethodAnonymousType { url = """", @params = """" };
+        ret.url = ""/somewhere"";
+        return ret;
+    }
+
+    // Stands in for a VB anonymous type that was assigned to after creation, which a C# anonymous type cannot be.
+    private sealed class TestMethodAnonymousType
+    {
+        public string url { get; set; }
+        public string @params { get; set; }
+    }
+}");
+    }
+
     [Fact]
     public async Task UnmutatedAnonymousTypeStaysAnonymousAsync()
     {
