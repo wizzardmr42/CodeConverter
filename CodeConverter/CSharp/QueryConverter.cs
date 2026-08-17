@@ -880,7 +880,30 @@ internal class QueryConverter
             CSSyntax.ExpressionSyntax aggExpr;
             switch (agg.Aggregation) {
                 case VBSyntax.GroupAggregationSyntax:
-                    aggExpr = groupIdName;
+                    // VB types a bare `Into Group` as IEnumerable(Of T), NOT
+                    // IGrouping(Of K, T) - decompiling shows it compiles the query to the
+                    // two-selector `GroupBy(keySelector, (key, elements) => ...)` overload,
+                    // so no IGrouping is ever produced. C# query syntax has no form that
+                    // emits that overload; `group x by k into g` always yields IGrouping.
+                    //
+                    // That difference is invisible until downstream code needs the wider
+                    // type - `dict.Add(key, New List(Of T))` against a dictionary built by
+                    // `.ToDictionary(..., Function(l) l.Group)` is CS1503 in C# and fine in
+                    // VB. So take the type from the VB semantic model and cast to it: an
+                    // upcast to an interface the runtime type already implements, free at
+                    // run time, and it keeps `Key` available on the other members.
+                    // Skipped when the group element is an anonymous type (`Group By` over
+                    // `New With {...}` or a join's transparent identifier): IEnumerable(Of
+                    // <anonymous>) has no nameable C# form, so GetTypeSyntax yields `var`
+                    // and `(var)Group` is a parse error. Those keep the IGrouping, which
+                    // still compiles - the wider type only matters where downstream code
+                    // needs it, and it cannot need it for a type it cannot name.
+                    aggExpr = _semanticModel.SyntaxTree == agg.Aggregation.SyntaxTree &&
+                              _semanticModel.GetTypeInfo(agg.Aggregation).Type is { } vbGroupType &&
+                              vbGroupType.TypeKind != TypeKind.Error &&
+                              !TypeConversionAnalyzer.ContainsAnonymousType(vbGroupType)
+                        ? SyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(vbGroupType), groupIdName)
+                        : groupIdName;
                     break;
                 case VBSyntax.FunctionAggregationSyntax fa:
                     var invocationTarget = SyntaxFactory.MemberAccessExpression(

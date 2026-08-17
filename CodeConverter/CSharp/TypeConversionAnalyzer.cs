@@ -229,7 +229,8 @@ internal class TypeConversionAnalyzer
         return SyntaxFactory.ParenthesizedLambdaExpression(paramList, body);
     }
 
-    private static bool ContainsAnonymousType(ITypeSymbol type)
+    /// <summary>Shared with <see cref="QueryConverter"/>, which has the same "(var)expr is a parse error" trap.</summary>
+    internal static bool ContainsAnonymousType(ITypeSymbol type)
     {
         if (type.IsAnonymousType) return true;
         if (type is IArrayTypeSymbol at) return ContainsAnonymousType(at.ElementType);

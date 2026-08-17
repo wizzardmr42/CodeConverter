@@ -610,6 +610,13 @@ internal partial class Test
         // (a `System.Linq.IGrouping<K,T>` doesn't). C# needs an explicit
         // `into @group select new { @group.Key.k1, @group.Key.k2, Group = @group }`
         // continuation to preserve the shape. Bug 2a / #1080-adjacent.
+        //
+        // The Group member is cast to IEnumerable<T> because that is the type VB
+        // gives it: decompiling shows VB compiles the query to the two-selector
+        // `GroupBy(keySelector, (key, elements) => ...)` overload and never produces
+        // an IGrouping at all. Without the cast the member is IGrouping<K,T>, and
+        // downstream code that assigns a plain List<T> into a dictionary built from
+        // it fails to compile (CS1503) where the VB was fine.
         await TestConversionVisualBasicToCSharpAsync(@"Public Class Class1
     Sub Foo()
         Dim xs As New List(Of String)
@@ -625,7 +632,7 @@ public partial class Class1
         var xs = new List<string>();
         var y = from x in xs
                 group x by new { x.Length, Count = x.Count() } into Group
-                select new { Group.Key.Length, Group.Key.Count, Group };
+                select new { Group.Key.Length, Group.Key.Count, Group = (IEnumerable<string>)Group };
     }
 }");
     }
