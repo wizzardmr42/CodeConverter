@@ -70,6 +70,7 @@ public class VBToCSConversion : ILanguageConversion
         foreach (XElement propertyGroup in propertyGroups) {
             TweakDefineConstants(propertyGroup, xmlNs);
             TweakOutputPath(propertyGroup, xmlNs);
+            TweakOverflowChecks(propertyGroup, xmlNs);
         }
 
         return xmlDoc.Declaration != null ? xmlDoc.Declaration + Environment.NewLine + xmlDoc : xmlDoc.ToString();
@@ -98,6 +99,46 @@ public class VBToCSConversion : ILanguageConversion
         var firstPropertyGroup = xmlDoc.Descendants(xmlNs + "PropertyGroup").FirstOrDefault();
         langVersion = new XElement(xmlNs + "LangVersion", _vbToCsProjectContentsConverter.LanguageVersion);
         firstPropertyGroup?.Add(langVersion);
+    }
+
+    /// <summary>
+    /// Carries VB's integer overflow checking across, because the two languages default the
+    /// OPPOSITE way and neither project necessarily says so.
+    ///
+    /// VB `RemoveIntegerChecks` defaults to false - arithmetic is overflow-CHECKED, and an
+    /// overflowing `Integer` multiply throws OverflowException. C#
+    /// `CheckForOverflowUnderflow` defaults to false - arithmetic is UNCHECKED, and the same
+    /// multiply silently wraps to a wrong value.
+    ///
+    /// So converting a project that never mentions the setting silently turns overflow
+    /// checking off for the whole assembly, trading a loud exception for a quietly wrong
+    /// number. Nothing in the conversion surfaces it: it is not a compile error, the metadata
+    /// surface is unchanged, and it only shows up by decompiling both assemblies and noticing
+    /// the `checked(...)` arithmetic has gone (648 sites to 0, on the codebase this was found
+    /// on).
+    ///
+    /// Hence an explicit value is always written, including when VB was silent - that silence
+    /// means "checked" in VB and would mean "unchecked" in C#.
+    /// </summary>
+    internal static void TweakOverflowChecks(XElement propertyGroup, XNamespace xmlNs)
+    {
+        // Only configuration property groups - the ones already carrying per-config compiler
+        // settings. Adding it to, say, a bare group of assembly metadata would be noise.
+        bool isConfigurationGroup = propertyGroup.Element(xmlNs + "DefineConstants") != null ||
+                                    propertyGroup.Element(xmlNs + "OutputPath") != null ||
+                                    propertyGroup.Element(xmlNs + "RemoveIntegerChecks") != null;
+        if (!isConfigurationGroup) return;
+
+        var removeIntegerChecks = propertyGroup.Element(xmlNs + "RemoveIntegerChecks");
+        bool overflowChecked = !string.Equals(removeIntegerChecks?.Value, "true", StringComparison.OrdinalIgnoreCase);
+        removeIntegerChecks?.Remove();
+
+        var checkForOverflow = propertyGroup.Element(xmlNs + "CheckForOverflowUnderflow");
+        if (checkForOverflow == null) {
+            checkForOverflow = new XElement(xmlNs + "CheckForOverflowUnderflow");
+            propertyGroup.Add(checkForOverflow);
+        }
+        checkForOverflow.Value = overflowChecked ? "true" : "false";
     }
 
     private static void TweakDefineConstants(XElement propertyGroup, XNamespace xmlNs)
