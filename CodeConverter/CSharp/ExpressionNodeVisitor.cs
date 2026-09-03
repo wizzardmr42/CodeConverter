@@ -1611,6 +1611,32 @@ internal class ExpressionNodeVisitor : VBasic.VisualBasicSyntaxVisitor<Task<CSha
                 ValidSyntaxFactory.IdentifierName((invocationSymbol.Name)));
         }
 
+        // In an expression tree VB records the array->IEnumerable receiver conversion of a
+        // reduced extension call as an explicit Convert node; C# omits implicit reference
+        // conversions. For byte[] that difference is behavioural: EF6 maps byte[] to the
+        // *scalar* Edm.Binary type, so `new[] { a.ID, b.ID }.Contains(o.SomeByteID)` in a query
+        // translated fine from VB (the Convert typed the source IEnumerable(Of Byte)) but the
+        // converted C# threw "DbExpressionBinding requires an input expression with a
+        // collection ResultType". Emit the cast VB emits; outside expression trees it is a
+        // no-op widening reference conversion.
+        if (invocationSymbol is IMethodSymbol { IsExtensionMethod: true, ReducedFrom: not null }
+            // Expression is null for a With-block or conditional-access member access (`.Foo(...)` / `x?.Foo(...)`)
+            && node.Expression is VBSyntax.MemberAccessExpressionSyntax { Expression: { } vbExtensionReceiver }
+            && _semanticModel.GetTypeInfo(vbExtensionReceiver) is var receiverTypeInfo
+            && receiverTypeInfo.ConvertedType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Collections_Generic_IEnumerable_T } convertedReceiverType
+            && convertedReceiverType.TypeArguments.FirstOrDefault()?.SpecialType == SpecialType.System_Byte
+            // Natural type is null for an array literal receiver (`{a, b}.Contains(...)`); when
+            // the receiver is already IEnumerable-typed there is no VB conversion to mirror.
+            && receiverTypeInfo.Type is null or IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Byte }
+            && convertedExpression is MemberAccessExpressionSyntax csExtensionMaes) {
+            // PreserveCast: the cast is redundant to the C# compiler, so the simplify pass
+            // would otherwise strip it - reintroducing the byte[]-vs-IEnumerable difference.
+            var castReceiver = SyntaxFactory.ParenthesizedExpression(
+                ValidSyntaxFactory.CastExpression(CommonConversions.GetTypeSyntax(convertedReceiverType), csExtensionMaes.Expression)
+                    .WithAdditionalAnnotations(new SyntaxAnnotation(AnnotationConstants.PreserveCastAnnotationKind)));
+            convertedExpression = csExtensionMaes.WithExpression(castReceiver);
+        }
+
         if (invocationSymbol is IMethodSymbol m && convertedExpression is LambdaExpressionSyntax) {
             convertedExpression = SyntaxFactory.ObjectCreationExpression(CommonConversions.GetFuncTypeSyntax(expressionType, m), ExpressionSyntaxExtensions.CreateArgList(convertedExpression), null);
         }

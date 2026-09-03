@@ -352,14 +352,9 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         // the operator method: `q = T.op_Concatenate(q, part)` for a metadata type,
         // or `q = q + part` once the declaration has been converted to `operator +`.
         // Emitting `q += part` produced CS0019 on the type.
-        // Resolve the operator from the LHS TYPE rather than GetSymbolInfo/GetOperation
-        // on the assignment statement — neither surfaces the user-defined operator
-        // for a VB compound assignment, so an earlier attempt keyed on those silently
-        // never fired.
         if (node.IsKind(VBasic.SyntaxKind.ConcatenateAssignmentStatement)
             && lhsTypeInfo.Type is { SpecialType: not SpecialType.System_String and not SpecialType.System_Object }
-            && lhsTypeInfo.Type.GetMembers(WellKnownMemberNames.ConcatenateOperatorName)
-                   .OfType<IMethodSymbol>().FirstOrDefault() is { } concatOp) {
+            && ResolveUserDefinedCompoundConcatOperator(node) is { } concatOp) {
             ExpressionSyntax concatCall = concatOp.ContainingType.IsDefinedInSource()
                 ? SyntaxFactory.BinaryExpression(SyntaxKind.AddExpression, lhs, rhs)
                 : SyntaxFactory.InvocationExpression(
@@ -448,6 +443,62 @@ internal class MethodBodyExecutableStatementVisitor : VBasic.VisualBasicSyntaxVi
         VBasic.SyntaxKind.IntegerDivideAssignmentStatement => "IntDivideObject",
         _ => null
     };
+
+    /// <summary>
+    /// The `Operator &amp;` a VB `&amp;=` on a user-defined type binds to. VB binds `l &amp;= r`
+    /// exactly as `l = l &amp; r`, collecting candidate operators from BOTH operand types and
+    /// picking the most specific - so when the RHS type (e.g. a derived class) declares a more
+    /// specific overload than any on the LHS type, that one wins and its more-derived return
+    /// type flows into the assignment. Resolving from the LHS type alone picked a base class's
+    /// metadata operator here, so a later VB downcast that succeeded at runtime (the value
+    /// really was the derived type) became an InvalidCastException in the converted C#.
+    /// GetSymbolInfo/GetOperation on the assignment statement don't surface the user-defined
+    /// operator for a VB compound assignment (and GetSpeculativeSymbolInfo on the equivalent
+    /// binary expression returns nothing either), so speculatively bind the equivalent binary
+    /// for its RESULT type and pick the candidate operator that produces it; fall back to the
+    /// LHS type's operator when that identifies nothing.
+    /// </summary>
+    private IMethodSymbol ResolveUserDefinedCompoundConcatOperator(VBSyntax.AssignmentStatementSyntax node)
+    {
+        var lhsType = _semanticModel.GetTypeInfo(node.Left).Type;
+        var rhsTypeInfo = _semanticModel.GetTypeInfo(node.Right);
+        var rhsType = rhsTypeInfo.Type ?? rhsTypeInfo.ConvertedType;
+
+        // GetSpeculativeSymbolInfo returns nothing for a VB binary operator expression, but
+        // GetSpeculativeTypeInfo does run overload resolution, so the RESULT type tells us
+        // which overload VB picked (the overloads here differ by return type precisely when
+        // picking the wrong one matters).
+        var equivalentConcat = VBasic.SyntaxFactory.ConcatenateExpression(node.Left.WithoutTrivia(), node.Right.WithoutTrivia());
+        var resultType = _semanticModel.GetSpeculativeTypeInfo(node.SpanStart, equivalentConcat, SpeculativeBindingOption.BindAsExpression).Type;
+
+        var candidates = OperatorCandidates(lhsType).Concat(OperatorCandidates(rhsType))
+            .Distinct(SymbolEqualityComparer.Default).OfType<IMethodSymbol>()
+            .Where(m => m.Parameters.Length == 2).ToList();
+
+        bool MatchesResultType(IMethodSymbol m) =>
+            resultType != null && SymbolEqualityComparer.Default.Equals(m.ReturnType, resultType);
+        bool ImplicitlyAccepts(ITypeSymbol from, ITypeSymbol to) {
+            if (from is null) return true; // literal with no natural type - rely on the return-type anchor
+            var conversion = _semanticModel.Compilation.ClassifyCommonConversion(from, to);
+            return conversion.Exists && conversion.IsImplicit;
+        }
+        bool Applicable(IMethodSymbol m) =>
+            ImplicitlyAccepts(lhsType, m.Parameters[0].Type) && ImplicitlyAccepts(rhsType, m.Parameters[1].Type);
+
+        var plausible = candidates.Where(m => MatchesResultType(m) && Applicable(m)).ToList();
+        return plausible.FirstOrDefault(m =>
+                   SymbolEqualityComparer.Default.Equals(m.Parameters[0].Type, lhsType) &&
+                   SymbolEqualityComparer.Default.Equals(m.Parameters[1].Type, rhsType))
+               ?? plausible.FirstOrDefault()
+               // An operand may reach its parameter via a user-defined conversion the common
+               // classifier can't see; the return type still identifies VB's choice.
+               ?? candidates.FirstOrDefault(MatchesResultType)
+               ?? lhsType.GetMembers(WellKnownMemberNames.ConcatenateOperatorName).OfType<IMethodSymbol>().FirstOrDefault();
+    }
+
+    private static IEnumerable<IMethodSymbol> OperatorCandidates(ITypeSymbol type) =>
+        type?.GetBaseTypesAndThis().SelectMany(t => t.GetMembers(WellKnownMemberNames.ConcatenateOperatorName).OfType<IMethodSymbol>())
+        ?? Enumerable.Empty<IMethodSymbol>();
 
     private async Task<SyntaxList<StatementSyntax>> ConvertMidAssignmentAsync(VBSyntax.AssignmentStatementSyntax node, VBSyntax.MidExpressionSyntax mes)
     {
